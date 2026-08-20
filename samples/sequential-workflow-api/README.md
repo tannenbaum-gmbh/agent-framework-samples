@@ -47,10 +47,17 @@ assert that:
    cp .env.example .env
    export $(grep -v '^#' .env | xargs)
    ```
-3. Install dependencies:
+3. In a dev container, the repository `.venv` and all runtime and test dependencies
+  are created automatically. New integrated terminals use this environment by
+  default.
+
+  For local development outside the dev container, run the following commands from
+  this sample directory:
 
    ```bash
-   pip install -r requirements.txt -r requirements-dev.txt
+  python -m venv ../../.venv
+  source ../../.venv/bin/activate
+  python -m pip install -r requirements-dev.txt
    ```
 4. Authenticate to Azure (the sample uses `DefaultAzureCredential`), e.g. `az login`.
 
