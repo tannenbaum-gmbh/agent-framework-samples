@@ -31,7 +31,7 @@ environment used by the samples in this repository. It provisions:
 az account set --subscription <subscription-id>
 
 az deployment sub create \
-  --location westeurope \
+  --location swedencentral \
   --template-file infra/main.bicep \
   --parameters infra/main.bicepparam \
   --parameters environmentName=<your-unique-name>

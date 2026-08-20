@@ -1,7 +1,7 @@
 using 'main.bicep'
 
 param environmentName = 'afsample'
-param location = 'westeurope'
+param location = 'swedencentral'
 param gpt5DeploymentName = 'gpt-5'
 param gpt5ModelVersion = '2025-08-07'
 param gpt5SkuName = 'GlobalStandard'

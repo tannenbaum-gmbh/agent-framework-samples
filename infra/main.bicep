@@ -7,7 +7,7 @@
 //
 // Deploy with (subscription scope):
 //   az deployment sub create \
-//     --location westeurope \
+//     --location swedencentral \
 //     --template-file infra/main.bicep \
 //     --parameters infra/main.bicepparam
 targetScope = 'subscription'
