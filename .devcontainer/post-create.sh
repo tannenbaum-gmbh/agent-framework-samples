@@ -20,6 +20,12 @@ if [ -f "${requirements_file}" ]; then
   "${venv_dir}/bin/python" -m pip install -r "${requirements_file}"
 fi
 
+if [ -f /etc/apt/sources.list.d/yarn.list ]; then
+  echo "==> Refreshing the Yarn repository signing key"
+  curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg \
+    | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/yarn-archive-keyring.gpg
+fi
+
 echo "==> Installing the latest Azure CLI"
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
