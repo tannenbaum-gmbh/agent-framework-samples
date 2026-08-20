@@ -5,16 +5,29 @@
 # with Azure and Microsoft Foundry.
 set -euo pipefail
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+venv_dir="${repo_root}/.venv"
+requirements_file="${repo_root}/samples/sequential-workflow-api/requirements-dev.txt"
+
+echo "==> Creating Python virtual environment"
+python -m venv --clear "${venv_dir}"
+
 echo "==> Upgrading pip"
-python -m pip install --upgrade pip
+"${venv_dir}/bin/python" -m pip install --upgrade pip
 
 echo "==> Installing sample dependencies"
-if [ -f "samples/sequential-workflow-api/requirements.txt" ]; then
-  pip install -r samples/sequential-workflow-api/requirements.txt
+if [ -f "${requirements_file}" ]; then
+  "${venv_dir}/bin/python" -m pip install -r "${requirements_file}"
 fi
 
+echo "==> Installing the latest Azure CLI"
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+echo "==> Installing the latest Bicep CLI"
+az bicep install
+
 echo "==> Azure CLI / Bicep versions"
-az version || true
-az bicep version || true
+az version
+az bicep version
 
 echo "Dev container ready. Run 'az login' to authenticate with Azure."
