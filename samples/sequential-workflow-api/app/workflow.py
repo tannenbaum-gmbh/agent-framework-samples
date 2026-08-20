@@ -73,7 +73,7 @@ class WorkflowService:
         thread = await self._get_thread(thread_id)
         async with thread.lock:
             start = time.perf_counter()
-            turn = len(thread.history) // 2 + 1
+            turn = sum(1 for m in thread.history if m.role == "user") + 1
             logger.info("thread=%s turn=%s starting sequential workflow run", thread_id, turn)
 
             researcher, writer = self._agent_factory()

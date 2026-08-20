@@ -56,7 +56,7 @@ def test_run_workflow_requires_thread_id_and_message(client: TestClient) -> None
 
 def test_two_threads_run_concurrently_over_http(client: TestClient) -> None:
     async def call(thread_id: str) -> float:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         start = time.perf_counter()
         await loop.run_in_executor(
             None,
