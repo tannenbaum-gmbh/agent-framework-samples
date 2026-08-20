@@ -39,7 +39,10 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.0' = {
     // Required so an AI Foundry project can be created on top of this account.
     allowProjectManagement: true
     // Agent Framework authenticates with Microsoft Entra ID credentials (e.g. AzureCliCredential).
-    disableLocalAuth: false
+    disableLocalAuth: true
+    managedIdentities: {
+      systemAssigned: true
+    }
     publicNetworkAccess: 'Enabled'
     deployments: [
       {
@@ -73,6 +76,9 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   name: foundryProjectName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     displayName: foundryProjectName
     description: 'Project used by the Agent Framework sequential workflow sample.'
