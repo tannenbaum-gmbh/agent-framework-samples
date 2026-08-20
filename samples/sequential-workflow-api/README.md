@@ -82,8 +82,22 @@ timestamps in the server logs/response `duration_seconds`:
 
 ```bash
 curl -s http://localhost:8000/workflows/sequential/run \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id": "user-1", "message": "Tell me about the Eiffel Tower"}'
+```
+
+```bash
+curl -s http://localhost:8000/workflows/sequential/run \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id": "user-2", "message": "Tell me about the Colosseum"}'
+```
+
+```bash
+curl -s http://localhost:8000/workflows/sequential/run \
+  -H "Content-Type: application/json" \
   -d '{"thread_id": "user-1", "message": "Tell me about the Eiffel Tower"}' &
 curl -s http://localhost:8000/workflows/sequential/run \
+  -H "Content-Type: application/json" \
   -d '{"thread_id": "user-2", "message": "Tell me about the Colosseum"}' &
 wait
 ```
