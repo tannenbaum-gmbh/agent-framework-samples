@@ -4,6 +4,8 @@
 //   Module `avm/res/cognitive-services/account`
 // - A GPT-5 model deployment on that account
 // - An AI Foundry project on the account, ready to be used with Agent Framework
+// - Optionally, an Azure Container Apps sandbox group (preview) used by the
+//   `sandbox-code-agent-evals` sample to run agent-generated code in isolation
 //
 // Deploy with (subscription scope):
 //   az deployment sub create \
@@ -41,6 +43,23 @@ param gpt5SkuName string = 'GlobalStandard'
 @description('Optional. Tokens-per-minute capacity (in units of 1,000) for the GPT-5 deployment.')
 param gpt5SkuCapacity int = 10
 
+@description('Optional. Deploy an Azure Container Apps sandbox group (preview) for the `sandbox-code-agent-evals` sample.')
+param deploySandboxGroup bool = false
+
+@description('Optional. Name of the Azure Container Apps sandbox group.')
+param sandboxGroupName string = 'sbg-${environmentName}'
+
+@description('Optional. Object ID of the principal that runs the sandbox sample (e.g. `az ad signed-in-user show --query id -o tsv`). Leave empty to skip the `Container Apps SandboxGroup Data Owner` role assignment.')
+param sandboxDataOwnerPrincipalId string = ''
+
+@description('Optional. Type of the principal receiving the sandbox data-owner role assignment.')
+@allowed([
+  'User'
+  'Group'
+  'ServicePrincipal'
+])
+param sandboxDataOwnerPrincipalType string = 'User'
+
 @description('Optional. Tags applied to all resources.')
 param tags object = {
   'azd-env-name': environmentName
@@ -67,6 +86,18 @@ module foundry 'modules/ai-foundry.bicep' = {
   }
 }
 
+module sandbox 'modules/sandbox-group.bicep' = if (deploySandboxGroup) {
+  name: 'sandbox-group-deployment'
+  scope: resourceGroup
+  params: {
+    location: location
+    sandboxGroupName: sandboxGroupName
+    dataOwnerPrincipalId: sandboxDataOwnerPrincipalId
+    dataOwnerPrincipalType: sandboxDataOwnerPrincipalType
+    tags: tags
+  }
+}
+
 @description('The name of the created resource group.')
 output resourceGroupName string = resourceGroup.name
 
@@ -78,3 +109,9 @@ output foundryProjectEndpoint string = foundry.outputs.projectEndpoint
 
 @description('The name of the GPT-5 model deployment to use as the Agent Framework `model` parameter.')
 output gpt5DeploymentName string = foundry.outputs.gpt5DeploymentName
+
+@description('The name of the Azure Container Apps sandbox group, or an empty string when `deploySandboxGroup` is false.')
+output sandboxGroupName string = deploySandboxGroup ? sandbox!.outputs.sandboxGroupName : ''
+
+@description('The region of the Azure Container Apps sandbox group, or an empty string when `deploySandboxGroup` is false.')
+output sandboxGroupLocation string = deploySandboxGroup ? sandbox!.outputs.sandboxGroupLocation : ''
