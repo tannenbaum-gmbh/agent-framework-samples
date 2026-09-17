@@ -119,13 +119,28 @@ class SandboxCodeRunner:
             return self._sandbox
         async with self._lock:
             if self._sandbox is None:
-                self._group_client = self._client_factory(self._settings)
-                poller = await self._group_client.begin_create_sandbox(
-                    disk=self._settings.disk_image,
-                    labels={"sample": "sandbox-code-agent-evals"},
-                )
-                self._sandbox = await poller.result()
-                await self._sandbox.mkdir(WORKSPACE)
+                if self._group_client is None:
+                    self._group_client = self._client_factory(self._settings)
+                sandbox = None
+                try:
+                    poller = await self._group_client.begin_create_sandbox(
+                        disk=self._settings.disk_image,
+                        labels={"sample": "sandbox-code-agent-evals"},
+                    )
+                    sandbox = await poller.result()
+                    await sandbox.mkdir(WORKSPACE)
+                except Exception:
+                    if sandbox is not None:
+                        try:
+                            await sandbox.delete()
+                        except Exception:
+                            pass
+                    try:
+                        await self._group_client.close()
+                    finally:
+                        self._group_client = None
+                    raise
+                self._sandbox = sandbox
         return self._sandbox
 
     async def run_python(self, code: str) -> CodeExecution:

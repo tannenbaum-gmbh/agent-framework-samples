@@ -10,6 +10,7 @@ venv_dir="${repo_root}/.venv"
 requirements_files=(
   "${repo_root}/samples/sequential-workflow-api/requirements-dev.txt"
   "${repo_root}/samples/sandbox-code-agent-evals/requirements-dev.txt"
+  "${repo_root}/samples/sandbox-hosted-agent/requirements-dev.txt"
 )
 
 echo "==> Creating Python virtual environment"
