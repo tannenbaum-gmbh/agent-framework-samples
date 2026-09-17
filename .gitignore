@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files
+.env
+*.local.bicepparam
+
+# Bicep build output
+*.json.bak
+main.json
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json

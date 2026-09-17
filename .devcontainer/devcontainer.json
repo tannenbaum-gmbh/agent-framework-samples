@@ -1,0 +1,45 @@
+{
+  "name": "Agent Framework Samples (Python + Azure/Microsoft Foundry)",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bullseye",
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "version": "latest",
+      "installBicep": true
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-azuretools.vscode-bicep",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-vscode.azurecli",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "humao.rest-client"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteEnv": {
+    "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}",
+    "PYTHONUNBUFFERED": "1",
+    "VIRTUAL_ENV": "${containerWorkspaceFolder}/.venv"
+  },
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "Sequential Workflow API",
+      "onAutoForward": "notify"
+    }
+  }
+}
