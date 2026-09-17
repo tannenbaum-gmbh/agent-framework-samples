@@ -9,6 +9,9 @@ environment used by the samples in this repository. It provisions:
 - A **GPT-5** model deployment on that account
 - An **AI Foundry project** on the account, ready to be used with
   [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python)
+- Optionally, an **Azure Container Apps sandbox group** (preview) used by the
+  [`sandbox-code-agent-evals`](../samples/sandbox-code-agent-evals) sample to run
+  agent-generated code in isolation
 
 ## Files
 
@@ -17,6 +20,7 @@ environment used by the samples in this repository. It provisions:
 | `main.bicep` | Subscription-scoped entry point. Creates the resource group and calls `modules/ai-foundry.bicep`. |
 | `main.bicepparam` | Default parameter values. Copy/adjust as needed (e.g. `main.local.bicepparam`, which is git-ignored). |
 | `modules/ai-foundry.bicep` | Resource-group-scoped module deploying the Cognitive Services account (via AVM), the GPT-5 deployment, and the AI Foundry project. |
+| `modules/sandbox-group.bicep` | Resource-group-scoped module deploying the Container Apps sandbox group and the `Container Apps SandboxGroup Data Owner` role assignment. |
 
 ## Prerequisites
 
@@ -37,15 +41,43 @@ az deployment sub create \
   --parameters environmentName=<your-unique-name>
 ```
 
+### Deploying the sandbox group
+
+The Container Apps sandbox group is off by default. Enable it and grant your own identity
+data-plane access in one go:
+
+```bash
+az deployment sub create \
+  --location swedencentral \
+  --template-file infra/main.bicep \
+  --parameters infra/main.bicepparam \
+  --parameters environmentName=<your-unique-name> \
+  --parameters deploySandboxGroup=true \
+  --parameters sandboxDataOwnerPrincipalId=$(az ad signed-in-user show --query id -o tsv)
+```
+
+| Parameter | Description |
+| --- | --- |
+| `deploySandboxGroup` | Deploy the `Microsoft.App/sandboxGroups` resource. Defaults to `false`. |
+| `sandboxGroupName` | Name of the sandbox group. Defaults to `sbg-<environmentName>`. |
+| `sandboxDataOwnerPrincipalId` | Object ID granted `Container Apps SandboxGroup Data Owner`. Leave empty to skip the role assignment. |
+| `sandboxDataOwnerPrincipalType` | `User` (default), `ServicePrincipal`, or `Group`. Use `ServicePrincipal` for CI identities. |
+
+Container Apps Sandboxes are in preview and only available in a subset of regions — check
+the [overview](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview)
+before deploying. Role assignments take 30–60 seconds to propagate; calls made before then
+fail with `403`.
+
 ## Outputs
 
-The deployment exposes the values needed by the [`sequential-workflow-api`](../samples/sequential-workflow-api)
-sample:
+The deployment exposes the values needed by the samples:
 
 | Output | Used for |
 | --- | --- |
 | `foundryProjectEndpoint` | `FOUNDRY_PROJECT_ENDPOINT` environment variable (`FoundryChatClient(project_endpoint=...)`) |
 | `gpt5DeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` environment variable (`FoundryChatClient(model=...)`) |
+| `sandboxGroupName` | `AZURE_SANDBOX_GROUP` environment variable (empty unless `deploySandboxGroup=true`) |
+| `sandboxGroupLocation` | `AZURE_SANDBOX_REGION` environment variable (empty unless `deploySandboxGroup=true`) |
 
 Retrieve them after deployment with:
 

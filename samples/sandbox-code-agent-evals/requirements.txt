@@ -1,0 +1,5 @@
+agent-framework-core>=1.18,<2
+agent-framework-foundry>=1.18,<2
+azure-containerapps-sandbox>=0.1.0b4,<0.2
+azure-identity>=1.19,<2
+pydantic>=2.9,<3
