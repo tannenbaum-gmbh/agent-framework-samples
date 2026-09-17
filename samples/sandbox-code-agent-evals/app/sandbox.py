@@ -123,7 +123,11 @@ class SandboxCodeRunner:
         try:
             result = await sandbox.exec(f"python3 {script_path}", working_directory=WORKSPACE)
         finally:
-            await sandbox.exec(f"rm -f {script_path}")
+            try:
+                await sandbox.exec(f"rm -f {script_path}")
+            except Exception:
+                # Best-effort cleanup; avoid masking the original failure.
+                pass
         return CodeExecution(
             exit_code=result.exit_code,
             stdout=_truncate(result.stdout),
