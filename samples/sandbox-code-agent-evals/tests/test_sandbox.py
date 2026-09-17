@@ -43,9 +43,13 @@ class FakeSandbox:
     def __init__(self, *, stdout: str = "ok", stderr: str = "", exit_code: int = 0) -> None:
         self.sandbox_id = "sandbox-1"
         self.files: dict[str, str] = {}
+        self.directories: list[str] = []
         self.commands: list[tuple[str, str | None]] = []
         self.deleted = False
         self._stdout, self._stderr, self._exit_code = stdout, stderr, exit_code
+
+    async def mkdir(self, path: str, **kwargs: Any) -> None:
+        self.directories.append(path)
 
     async def write_file(self, path: str, content: str, **kwargs: Any) -> None:
         self.files[path] = content
@@ -116,6 +120,7 @@ async def test_run_python_writes_script_then_executes_it() -> None:
     # The temporary script is cleaned up afterwards.
     assert sandbox.commands[1][0] == f"rm -f {script_path}"
     assert clients[0].create_calls[0]["disk"] == "python-3.14"
+    assert sandbox.directories == [WORKSPACE]
 
 
 async def test_sandbox_is_created_once_and_reused() -> None:

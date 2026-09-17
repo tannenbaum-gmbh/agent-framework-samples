@@ -61,20 +61,35 @@ def _truncate(value: str | None) -> str:
     return f"{text[:MAX_OUTPUT_CHARS]}\n... [truncated, {len(text) - MAX_OUTPUT_CHARS} more characters]"
 
 
+class _DefaultSandboxGroupClient:
+    def __init__(self, settings: SandboxSettings) -> None:
+        from azure.containerapps.sandbox import endpoint_for_region
+        from azure.containerapps.sandbox.aio import SandboxGroupClient
+        from azure.identity.aio import DefaultAzureCredential
+
+        self._credential = DefaultAzureCredential()
+        self._client = SandboxGroupClient(
+            endpoint_for_region(settings.region),
+            self._credential,
+            subscription_id=settings.subscription_id,
+            resource_group=settings.resource_group,
+            sandbox_group=settings.sandbox_group,
+        )
+
+    async def begin_create_sandbox(self, **kwargs: Any) -> Any:
+        return await self._client.begin_create_sandbox(**kwargs)
+
+    async def close(self) -> None:
+        try:
+            await self._client.close()
+        finally:
+            await self._credential.close()
+
+
 def _default_client_factory(settings: SandboxSettings) -> Any:
     # Imported lazily so the Azure SDKs are only needed when actually talking to a
     # sandbox group, keeping unit tests lightweight and offline.
-    from azure.containerapps.sandbox import endpoint_for_region
-    from azure.containerapps.sandbox.aio import SandboxGroupClient
-    from azure.identity.aio import DefaultAzureCredential
-
-    return SandboxGroupClient(
-        endpoint_for_region(settings.region),
-        DefaultAzureCredential(),
-        subscription_id=settings.subscription_id,
-        resource_group=settings.resource_group,
-        sandbox_group=settings.sandbox_group,
-    )
+    return _DefaultSandboxGroupClient(settings)
 
 
 class SandboxCodeRunner:
@@ -110,6 +125,7 @@ class SandboxCodeRunner:
                     labels={"sample": "sandbox-code-agent-evals"},
                 )
                 self._sandbox = await poller.result()
+                await self._sandbox.mkdir(WORKSPACE)
         return self._sandbox
 
     async def run_python(self, code: str) -> CodeExecution:
