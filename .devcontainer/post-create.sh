@@ -8,6 +8,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 venv_dir="${repo_root}/.venv"
 requirements_files=(
+  "${repo_root}/samples/prompt-agent/requirements.txt"
   "${repo_root}/samples/sequential-workflow-api/requirements-dev.txt"
   "${repo_root}/samples/sandbox-code-agent-evals/requirements-dev.txt"
   "${repo_root}/samples/sandbox-hosted-agent/requirements-dev.txt"
