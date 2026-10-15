@@ -11,6 +11,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 | [`infra/`](infra) | Bicep IaC (using the [Azure Verified Module `avm/res/cognitive-services/account`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/cognitive-services/account)) that deploys a Microsoft Foundry account with a GPT-5 model deployment and an AI Foundry project, plus an optional Azure Container Apps sandbox group. |
 | [`samples/prompt-agent/`](samples/prompt-agent) | A minimal prompt agent that sends one prompt to a Microsoft Foundry model and prints the response. |
 | [`samples/mslearn-prompt-agent/`](samples/mslearn-prompt-agent) | A persistent Foundry prompt agent with Microsoft Learn MCP tools, designed for comparison with the hosted-agent sample. |
+| [`samples/enterprise-architect-prompt-agent/`](samples/enterprise-architect-prompt-agent) | An enterprise architect prompt agent using A2A to consult the Microsoft Learn agent and Foundry file search for internal architecture guidelines. |
 | [`samples/sequential-workflow-api/`](samples/sequential-workflow-api) | A 2-agent sequential workflow (researcher → writer) built with Agent Framework and exposed as a FastAPI endpoint, demonstrating concurrent execution across multiple threads/users. |
 | [`samples/conditional-workflow/`](samples/conditional-workflow) | A multi-step content workflow (planner → writer → reviewer) with a conditional revision branch and deterministic tests. |
 | [`samples/sandbox-code-agent-evals/`](samples/sandbox-code-agent-evals) | An agent that writes and runs Python inside an [Azure Container Apps sandbox](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview), scored with Microsoft Foundry's evaluation service and a CI quality gate. |
@@ -24,6 +25,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 3. Run a sample:
    - [`samples/prompt-agent/README.md`](samples/prompt-agent/README.md)
    - [`samples/mslearn-prompt-agent/README.md`](samples/mslearn-prompt-agent/README.md)
+   - [`samples/enterprise-architect-prompt-agent/README.md`](samples/enterprise-architect-prompt-agent/README.md)
    - [`samples/sequential-workflow-api/README.md`](samples/sequential-workflow-api/README.md)
    - [`samples/conditional-workflow/README.md`](samples/conditional-workflow/README.md)
    - [`samples/sandbox-code-agent-evals/README.md`](samples/sandbox-code-agent-evals/README.md)

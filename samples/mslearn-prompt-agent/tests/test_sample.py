@@ -3,7 +3,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from app import create, delete, invoke
-from app.agent import INSTRUCTIONS, MSLEARN_MCP_URL, create_definition
+from app.agent import (
+    INSTRUCTIONS,
+    MSLEARN_MCP_URL,
+    create_agent_card,
+    create_definition,
+    create_endpoint_config,
+)
 from app.config import Settings, get_settings
 
 SETTINGS = Settings(
@@ -48,6 +54,23 @@ def test_create_registers_persistent_version(monkeypatch: pytest.MonkeyPatch) ->
     call = project.agents.create_version.call_args
     assert call.kwargs["agent_name"] == "mslearn-prompt-agent"
     assert call.kwargs["definition"].as_dict()["kind"] == "prompt"
+    project.agents.update_details.assert_called_once()
+    update = project.agents.update_details.call_args.kwargs
+    assert update["agent_name"] == "mslearn-prompt-agent"
+    assert update["agent_card"].as_dict() == create_agent_card().as_dict()
+    assert update["agent_endpoint"].as_dict() == create_endpoint_config().as_dict()
+
+
+def test_a2a_endpoint_publishes_mslearn_skill() -> None:
+    card = create_agent_card().as_dict()
+    endpoint = create_endpoint_config().as_dict()
+
+    assert card["version"] == "1.0"
+    assert card["skills"][0]["id"] == "microsoft-learn-documentation"
+    assert endpoint["protocol_configuration"] == {
+        "responses": {},
+        "a2a": {},
+    }
 
 
 def test_invoke_references_registered_agent(monkeypatch: pytest.MonkeyPatch) -> None:

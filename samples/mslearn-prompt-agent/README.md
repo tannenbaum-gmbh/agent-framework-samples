@@ -1,9 +1,11 @@
 # Microsoft Learn MCP prompt agent
 
 This sample creates a persistent Microsoft Foundry **prompt agent** that uses the
-public Microsoft Learn MCP server. It intentionally mirrors the instructions and
-tool behavior in [`mslearn-hosted-agent`](../mslearn-hosted-agent) so you can
-demonstrate the hosting-model differences without changing the agent's purpose.
+public Microsoft Learn MCP server and exposes both Responses and Agent2Agent
+(A2A) endpoints. It intentionally mirrors the instructions and tool behavior in
+[`mslearn-hosted-agent`](../mslearn-hosted-agent) while also acting as the remote
+documentation specialist for
+[`enterprise-architect-prompt-agent`](../enterprise-architect-prompt-agent).
 
 ## What this sample demonstrates
 
@@ -11,7 +13,8 @@ The prompt, model reference, and MCP tool configuration are stored as a versione
 resource in Foundry Agent Service. Foundry runs the model-and-tool loop; there is
 no application container to build, registry to manage, or agent process to host.
 After creation, the agent appears in the Foundry portal and remains there until
-you delete its version.
+you delete its version. The create command also publishes an agent card and
+enables incoming A2A 1.0 requests.
 
 | Characteristic | Prompt agent | Hosted agent |
 | --- | --- | --- |
@@ -63,7 +66,8 @@ python -m app.create
 ```
 
 The command creates a new immutable version of `mslearn-prompt-agent` and leaves
-it deployed. Open that project in the Foundry portal and select **Build** >
+it deployed, then updates the stable agent endpoint to enable A2A. Open that
+project in the Foundry portal and select **Build** >
 **Agents** to inspect its model, instructions, Microsoft Learn MCP tool, and
 version.
 
@@ -92,6 +96,36 @@ python -m app.invoke --name customer-demo-prompt-agent "What is Agent Framework?
 You can also test the persistent agent from the Foundry playground. Both paths
 use the server-side model, instructions, and MCP tool shown in the portal.
 
+## Use the A2A endpoint
+
+The authenticated A2A base path is:
+
+```text
+https://<account>.services.ai.azure.com/api/projects/<project>/agents/mslearn-prompt-agent/endpoint/protocols/a2a
+```
+
+Callers need the **Foundry Agent Consumer** role or higher on this project. For a
+Foundry A2A connection, use the base path above, the `agentic-identity`
+authentication type, and audience `https://ai.azure.com`. Do not append an agent
+card path; Foundry discovers and negotiates the A2A 1.0 agent card.
+
+To send a direct smoke-test request using your current Azure CLI login, install
+`jq` and run:
+
+```bash
+./test-a2a.sh "What are Microsoft Foundry hosted agents?"
+```
+
+The script derives the A2A URL from `FOUNDRY_PROJECT_ENDPOINT`, obtains a token
+with `az account get-access-token`, and explicitly selects the GA A2A v1.0
+protocol. It polls asynchronous tasks until they complete and prints the final
+response. Set `AGENT_NAME` when testing an agent created with a custom name, or
+`A2A_TIMEOUT_SECONDS` to change the default 120-second timeout.
+
+The Python SDK currently configures incoming A2A rather than the Foundry portal.
+Running `app.create` again preserves the endpoint configuration while adding a
+new immutable agent version.
+
 ## Delete a version
 
 Use the version printed by `app.create`:
@@ -114,9 +148,11 @@ python -m app.delete --name customer-demo-prompt-agent --version 1
    persistent prompt-agent definition immediately.
 3. Ask the same question through both CLIs to show equivalent Microsoft Learn
    grounding.
-4. Open the prompt agent in the playground and inspect its declarative model,
-   instructions, MCP tool, and versions.
-5. Contrast that with the hosted-agent deployment, where Foundry runs your
+4. Create the enterprise architect sample and ask it a Microsoft documentation
+   question to show the A2A delegation.
+5. Open the prompt agent in the playground and inspect its declarative model,
+   instructions, MCP tool, agent card, and versions.
+6. Contrast that with the hosted-agent deployment, where Foundry runs your
    container and exposes its Responses endpoint.
 
 ## Files
@@ -128,9 +164,12 @@ python -m app.delete --name customer-demo-prompt-agent --version 1
 | `app/invoke.py` | Invoke the named prompt agent through the Responses API. |
 | `app/delete.py` | Delete a specific prompt-agent version. |
 | `app/config.py` | Read and validate environment configuration. |
+| `test-a2a.sh` | Smoke-test the A2A endpoint with the current Azure CLI login. |
 
 ## References
 
 - [Quickstart: Create a prompt agent](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-create-prompt-agent)
 - [Connect agents to Model Context Protocol servers](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/model-context-protocol)
+- [Enable incoming A2A on a Foundry agent](https://learn.microsoft.com/azure/foundry/agents/how-to/enable-agent-to-agent-endpoint)
+- [Connect to an A2A agent endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/agent-to-agent)
 - [Foundry hosted agents](https://learn.microsoft.com/agent-framework/hosting/foundry-hosted-agent)

@@ -7,7 +7,12 @@ import argparse
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 
-from .agent import AGENT_NAME, create_definition
+from .agent import (
+    AGENT_NAME,
+    create_agent_card,
+    create_definition,
+    create_endpoint_config,
+)
 from .config import get_settings
 
 
@@ -24,8 +29,13 @@ def main() -> None:
             agent_name=args.name,
             definition=create_definition(settings),
         )
+        project.agents.update_details(
+            agent_name=args.name,
+            agent_endpoint=create_endpoint_config(),
+            agent_card=create_agent_card(),
+        )
         print(f"Created {agent.name}, version {agent.version}")
-        print("The prompt agent is now available in the Foundry portal.")
+        print("The prompt agent is available through Responses and A2A protocols.")
 
 
 if __name__ == "__main__":

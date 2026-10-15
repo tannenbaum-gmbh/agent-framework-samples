@@ -1,6 +1,6 @@
 // Provisions a Microsoft Foundry (Cognitive Services `AIServices`) account using the
-// Azure Verified Module for Cognitive Services accounts, a GPT-5 model deployment, and
-// an AI Foundry project on top of it, ready to be used with Agent Framework.
+// Azure Verified Module for Cognitive Services accounts, GPT-5 and GPT-5.3 Codex model
+// deployments, and an AI Foundry project ready to be used with Agent Framework.
 targetScope = 'resourceGroup'
 
 @description('Required. Azure region for the resources.')
@@ -23,6 +23,18 @@ param gpt5SkuName string
 
 @description('Required. Tokens-per-minute capacity (in units of 1,000) for the GPT-5 deployment.')
 param gpt5SkuCapacity int
+
+@description('Required. Name of the GPT-5.3 Codex model deployment.')
+param gpt53CodexDeploymentName string
+
+@description('Required. Model version for the GPT-5.3 Codex deployment.')
+param gpt53CodexModelVersion string
+
+@description('Required. Deployment SKU name for the GPT-5.3 Codex model.')
+param gpt53CodexSkuName string
+
+@description('Required. Tokens-per-minute capacity (in units of 1,000) for the GPT-5.3 Codex deployment.')
+param gpt53CodexSkuCapacity int
 
 @description('Optional. Tags applied to the resources.')
 param tags object = {}
@@ -55,6 +67,18 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.0' = {
         sku: {
           name: gpt5SkuName
           capacity: gpt5SkuCapacity
+        }
+      }
+      {
+        name: gpt53CodexDeploymentName
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-5.3-codex'
+          version: gpt53CodexModelVersion
+        }
+        sku: {
+          name: gpt53CodexSkuName
+          capacity: gpt53CodexSkuCapacity
         }
       }
     ]
@@ -100,3 +124,6 @@ output projectEndpoint string = '${normalizedAccountEndpoint}api/projects/${proj
 
 @description('The name of the GPT-5 model deployment to use as the Agent Framework `model` parameter.')
 output gpt5DeploymentName string = gpt5DeploymentName
+
+@description('The name of the GPT-5.3 Codex model deployment.')
+output gpt53CodexDeploymentName string = gpt53CodexDeploymentName

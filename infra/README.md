@@ -6,7 +6,7 @@ environment used by the samples in this repository. It provisions:
 - A resource group
 - A Cognitive Services account (`kind: AIServices`), deployed with the
   [Azure Verified Module `avm/res/cognitive-services/account`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/cognitive-services/account)
-- A **GPT-5** model deployment on that account
+- **GPT-5** and **GPT-5.3 Codex** model deployments on that account
 - An **AI Foundry project** on the account, ready to be used with
   [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python)
 - Optionally, an **Azure Container Apps sandbox group** (preview) used by the
@@ -26,7 +26,8 @@ environment used by the samples in this repository. It provisions:
 
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) with the Bicep tooling
   (already installed in this repo's [devcontainer](../.devcontainer/devcontainer.json))
-- An Azure subscription with access/quota for the GPT-5 model in the chosen region
+- An Azure subscription with access/quota for the GPT-5 and GPT-5.3 Codex
+  models in the chosen region
 - `az login`
 
 ## Deploy
@@ -76,6 +77,7 @@ The deployment exposes the values needed by the samples:
 | --- | --- |
 | `foundryProjectEndpoint` | `FOUNDRY_PROJECT_ENDPOINT` environment variable (`FoundryChatClient(project_endpoint=...)`) |
 | `gpt5DeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` environment variable (`FoundryChatClient(model=...)`) |
+| `gpt53CodexDeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` for samples that use GPT-5.3 Codex |
 | `sandboxGroupName` | `AZURE_SANDBOX_GROUP` environment variable (empty unless `deploySandboxGroup=true`) |
 | `sandboxGroupLocation` | `AZURE_SANDBOX_REGION` environment variable (empty unless `deploySandboxGroup=true`) |
 
@@ -92,6 +94,9 @@ az deployment sub show \
 - The GPT-5 model name/version (`gpt-5`, `2025-08-07`) and the `GlobalStandard` SKU capacity
   are parameterized in `main.bicep`/`main.bicepparam` — adjust them to match the model
   catalog values and quota available in your subscription/region.
+- The GPT-5.3 Codex deployment defaults to deployment name `gpt-5.3-codex-2`,
+  model `gpt-5.3-codex`, version `2026-02-24`, and the `GlobalStandard` SKU.
+  Its name, version, SKU, and capacity are independently parameterized.
 - `disableLocalAuth` is set to `false` so both Microsoft Entra ID and API-key based
   authentication work; for production scenarios prefer Entra ID only (`disableLocalAuth: true`)
   and grant the `Cognitive Services User`/`Cognitive Services OpenAI User` role to your
