@@ -109,6 +109,19 @@ Foundry A2A connection, use the base path above, the `agentic-identity`
 authentication type, and audience `https://ai.azure.com`. Do not append an agent
 card path; Foundry discovers and negotiates the A2A 1.0 agent card.
 
+To send a direct smoke-test request using your current Azure CLI login, install
+`jq` and run:
+
+```bash
+./test-a2a.sh "What are Microsoft Foundry hosted agents?"
+```
+
+The script derives the A2A URL from `FOUNDRY_PROJECT_ENDPOINT`, obtains a token
+with `az account get-access-token`, and explicitly selects the GA A2A v1.0
+protocol. It polls asynchronous tasks until they complete and prints the final
+response. Set `AGENT_NAME` when testing an agent created with a custom name, or
+`A2A_TIMEOUT_SECONDS` to change the default 120-second timeout.
+
 The Python SDK currently configures incoming A2A rather than the Foundry portal.
 Running `app.create` again preserves the endpoint configuration while adding a
 new immutable agent version.
@@ -151,6 +164,7 @@ python -m app.delete --name customer-demo-prompt-agent --version 1
 | `app/invoke.py` | Invoke the named prompt agent through the Responses API. |
 | `app/delete.py` | Delete a specific prompt-agent version. |
 | `app/config.py` | Read and validate environment configuration. |
+| `test-a2a.sh` | Smoke-test the A2A endpoint with the current Azure CLI login. |
 
 ## References
 
