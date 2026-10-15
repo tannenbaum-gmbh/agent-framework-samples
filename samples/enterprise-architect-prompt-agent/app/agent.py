@@ -69,6 +69,6 @@ def create_definition(
                 a2a_version=A2AProtocolVersion.V1_0,
                 project_connection_id=a2a_connection_id,
             ),
-            #FileSearchTool(vector_store_ids=[vector_store_id]),
+            FileSearchTool(vector_store_ids=[vector_store_id]),
         ],
     )

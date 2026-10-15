@@ -74,7 +74,7 @@ export $(grep -v '^#' .env | xargs)
 https://<resource>.services.ai.azure.com/api/projects/<project>
 ```
 
-`FOUNDRY_MODEL_DEPLOYMENT` defaults to `gpt-5`.
+`FOUNDRY_MODEL_DEPLOYMENT` defaults to `gpt-5.3-codex-2`.
 `MSLEARN_A2A_CONNECTION_NAME` is the connection created above.
 
 ## Review the internal guidelines

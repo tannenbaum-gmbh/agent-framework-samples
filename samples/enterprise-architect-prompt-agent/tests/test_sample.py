@@ -8,7 +8,7 @@ from app.config import Settings, get_settings
 
 SETTINGS = Settings(
     project_endpoint="https://example.services.ai.azure.com/api/projects/demo",
-    model_deployment="gpt-5",
+    model_deployment="gpt-5.3-codex-2",
     a2a_connection_name="mslearn-a2a",
 )
 
@@ -30,7 +30,7 @@ def test_definition_combines_a2a_and_file_search() -> None:
     ).as_dict()
 
     assert definition["kind"] == "prompt"
-    assert definition["model"] == "gpt-5"
+    assert definition["model"] == "gpt-5.3-codex-2"
     assert definition["instructions"] == INSTRUCTIONS
     assert definition["tools"] == [
         {
@@ -164,3 +164,11 @@ def test_settings_require_a2a_connection(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(RuntimeError, match="MSLEARN_A2A_CONNECTION_NAME"):
         get_settings()
+
+
+def test_settings_default_model_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", SETTINGS.project_endpoint)
+    monkeypatch.setenv("MSLEARN_A2A_CONNECTION_NAME", "mslearn-a2a")
+    monkeypatch.delenv("FOUNDRY_MODEL_DEPLOYMENT", raising=False)
+
+    assert get_settings().model_deployment == "gpt-5.3-codex-2"
