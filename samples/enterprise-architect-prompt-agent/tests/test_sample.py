@@ -103,6 +103,7 @@ def test_invoke_references_registered_agent(monkeypatch: pytest.MonkeyPatch) -> 
 
     openai.responses.create.assert_called_once_with(
         input="Design a tier-1 platform",
+        tool_choice="required",
         extra_body={
             "agent_reference": {
                 "name": AGENT_NAME,
@@ -110,6 +111,30 @@ def test_invoke_references_registered_agent(monkeypatch: pytest.MonkeyPatch) -> 
             }
         },
     )
+
+
+def test_invoke_debug_prints_complete_response(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project, openai = clients()
+    response = openai.responses.create.return_value
+    response.status = "completed"
+    response.output_text = "Authorization required"
+    response.model_dump_json.return_value = '{"output":[{"type":"a2a_call"}]}'
+    monkeypatch.setattr(invoke, "get_settings", lambda: SETTINGS)
+    monkeypatch.setattr(invoke, "DefaultAzureCredential", MagicMock())
+    monkeypatch.setattr(invoke, "AIProjectClient", MagicMock(return_value=project))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["invoke", "--debug", "Ask the documentation agent"],
+    )
+
+    invoke.main()
+
+    captured = capsys.readouterr()
+    assert captured.out == "Authorization required\n"
+    assert captured.err == '{"output":[{"type":"a2a_call"}]}\n'
 
 
 def test_delete_removes_agent_and_vector_store(

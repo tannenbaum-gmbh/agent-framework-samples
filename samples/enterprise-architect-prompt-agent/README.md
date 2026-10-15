@@ -126,6 +126,23 @@ python -m app.invoke "Ask the documentation agent how Azure availability zones w
 The combined answer should cite internal filenames and requirement IDs while
 preserving Microsoft Learn links returned by the remote A2A agent.
 
+The invocation sets `tool_choice="required"` so the prompt agent cannot answer
+without using one of its configured tools. Its instructions additionally
+require A2A for Microsoft and Azure product claims and prohibit substituting
+model knowledge if delegation fails. Because prompt-agent versions are
+immutable, rerun `python -m app.create` after changing these instructions and
+invoke the newly created version.
+
+For an OAuth passthrough connection, the first A2A invocation returns a consent
+link. Open it, sign in, grant access, and then retry the question. To inspect the
+underlying tool result instead of only the model's final text, add `--debug`;
+the complete Responses API result is written to standard error:
+
+```bash
+python -m app.invoke --debug \
+  "Ask the documentation agent how Azure availability zones work."
+```
+
 ## Delete sample resources
 
 Use the values printed by `app.create`:

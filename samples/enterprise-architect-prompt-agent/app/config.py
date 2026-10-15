@@ -24,7 +24,7 @@ def get_settings() -> Settings:
             "MSLEARN_A2A_CONNECTION_NAME environment variable is required."
         )
 
-    model = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "").strip() or "gpt-5"
+    model = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "").strip() or "gpt-5-mini"
     return Settings(
         project_endpoint=endpoint,
         model_deployment=model,
