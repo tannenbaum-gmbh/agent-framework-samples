@@ -9,7 +9,7 @@ or custom tools.
 | --- | --- | --- | --- |
 | Local CLI | Your machine | `python -m app.run_agent` | Foundry / Microsoft Learn MCP |
 | Local HTTP host | Your machine | Responses API on port 8088 | Foundry / Microsoft Learn MCP |
-| Foundry hosted agent | A container managed by Foundry Agent Service | Authenticated Foundry Responses endpoint or playground | Foundry / Microsoft Learn MCP |
+| Foundry hosted agent | Python code built and managed by Foundry Agent Service | Authenticated Foundry Responses endpoint or playground | Foundry / Microsoft Learn MCP |
 
 In all modes, **the model remains in Azure**. The agent process calls the model, opens
 a Streamable HTTP MCP connection to `https://learn.microsoft.com/api/mcp`, executes
@@ -22,18 +22,20 @@ Unlike [`sandbox-hosted-agent`](../sandbox-hosted-agent), this sample deploys a 
 
 ## Prerequisites
 
-- Python 3.10+ (the container uses Python 3.12).
+- Python 3.10+ locally (Foundry uses the managed `python_3_14` runtime).
 - A Foundry project and a tool-capable model deployment, such as the GPT-5 deployment
   from [`infra/README.md`](../../infra/README.md). No sandbox group is needed.
 - `az login` and permission to invoke the model locally (Foundry User, formerly
   Azure AI User, at project scope).
 - Outbound HTTPS access to your Foundry project and `learn.microsoft.com`.
-- For deployment: an Azure Container Registry (ACR), permission to build/push images,
-  and **Foundry Project Manager** at project scope.
+- For deployment: **Foundry Project Manager** at project scope. No Docker,
+  Azure Container Registry (ACR), image build/push permissions, or `azd` is required.
 
-The shared infrastructure provides the project/model, **not ACR or hosted-agent
-deployment permissions**. Check current regional availability and prerequisites in
-the [hosted-agent deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent).
+The shared infrastructure provides the project/model, **not hosted-agent
+deployment permissions**. This sample follows the
+[Python ZIP quickstart](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-hosted-agent?pivots=python).
+Check current regional availability and prerequisites in the
+[hosted-agent deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent).
 The Foundry hosting adapter is a beta dependency, pinned here because its API evolves.
 
 ## Setup
@@ -85,7 +87,7 @@ curl -f -sS http://localhost:8088/responses \
   -d '{"input":"What are Foundry hosted agents? Include documentation links.","stream":false,"store":false}'
 ```
 
-This is the **same Responses host** used in the deployed container. A factory creates
+This is the **same Responses host** used in the deployed Python runtime. A factory creates
 a fresh agent/client/MCP connection per request; the hosting adapter manages their
 async lifecycle. The credential lives for the server lifetime. The example uses
 `store:false` for one-shot requests so it needs no conversation persistence setup.
@@ -96,72 +98,52 @@ do not expose or publicly forward it, and stop it with Ctrl+C when finished.
 `/readiness` checks the host, not model permissions or MCP connectivity; send a
 Responses request to validate those.
 
-## 3. Deploy the container as a Foundry hosted agent
+## 3. Deploy Python source as a Foundry hosted agent
 
-### Build in ACR
+### Package, upload, wait, and route
 
-Set your existing ACR name and a new image tag for each release:
-
-```bash
-export ACR_NAME=yourregistry
-export IMAGE_TAG=v1
-export IMAGE="$ACR_NAME.azurecr.io/mslearn-agent:$IMAGE_TAG"
-
-az acr build --registry "$ACR_NAME" \
-  --image "mslearn-agent:$IMAGE_TAG" --platform linux/amd64 .
-```
-
-This uses ACR's remote builder; local Docker is not required. The image runs as a
-non-root user and contains only dependencies and application code, not your
-environment file, Azure CLI sign-in, or local credentials.
-
-### Allow Foundry to pull the image
-
-Find the system-assigned principal ID on your **Foundry project** (not the parent
-account), then grant registry access. For an ABAC-enabled registry:
+Run the deployment command, then invoke the persistent agent:
 
 ```bash
-export PROJECT_PRINCIPAL_ID=your-project-managed-identity-object-id
-ACR_ID=$(az acr show --name "$ACR_NAME" --query id -o tsv)
-
-az role assignment create \
-  --assignee-object-id "$PROJECT_PRINCIPAL_ID" \
-  --assignee-principal-type ServicePrincipal \
-  --role "AcrPull" \
-  --scope "$ACR_ID"
-```
-
-For a registry using repository ABAC instead of classic RBAC, use `Container Registry Repository Reader`.
-Your build/push identity also needs the registry permissions described in the
-[ACR role reference](https://learn.microsoft.com/azure/container-registry/container-registry-roles).
-Creating role assignments requires a role such as Role Based Access Control Administrator.
-Allow time for RBAC propagation.
-
-### Register, wait, and invoke
-
-```bash
-python -m app.deploy --image "$IMAGE"
+python -m app.deploy
 python -m app.invoke "When should I use Foundry hosted agents? Include source links."
 ```
 
-The deployment command creates a version of `mslearn-agent`, advertises Responses
-protocol **2.0.0**, and waits up to ten minutes for `active`. Provisioning failures
-and timeouts raise errors rather than reporting a successful deployment. There is
-no separate start operation. Both commands accept `--name` to select another agent.
+The deployment command:
+
+1. Creates a temporary ZIP containing only `main.py`, `requirements.txt`, and the
+   runtime modules in `app/`. Environment files, local credentials, virtual
+   environments, tests, and deployment/invocation scripts are not uploaded.
+2. Calls `project.agents.create_version_from_code` to create a version of
+   `mslearn-agent`, advertising Responses protocol **2.0.0**. Foundry installs
+   `requirements.txt` using `CodeDependencyResolution.REMOTE_BUILD` and runs
+   `python main.py` in the managed `python_3_14` runtime.
+3. Waits up to ten minutes for `active`, then routes **100% of the named agent's
+   endpoint traffic to the new version** using `update_details`. Existing endpoint
+   routing is replaced only after the new version becomes active.
+4. Deletes the local temporary ZIP, including on failure.
+
+Unlike the quickstart's temporary validation script, this sample **keeps the
+version and endpoint routing** so you can invoke it later. Re-running deployment
+creates another version and switches traffic to it; use a different `--name` to
+avoid replacing traffic for an existing agent. Provisioning failures, timeouts,
+and routing errors raise exceptions rather than reporting success. Failed versions
+remain available for troubleshooting; delete the agent when no longer needed.
+There is no separate start operation. Both commands accept `--name`.
 Invocations target the named agent's endpoint, not a pinned version.
 The invocation command also rejects failed or incomplete Responses results, even
 when the server returns HTTP 200.
 
-Foundry runs the image, exposes an authenticated endpoint, and supplies a dedicated
+Foundry builds and runs the uploaded code, exposes an authenticated endpoint, and supplies a dedicated
 Entra agent identity. `DefaultAzureCredential` uses that identity inside the runtime;
-no developer token or client secret is copied to the image. The deployed version
+no developer token or client secret is copied to the ZIP. The deployed version
 receives the project endpoint and model deployment as non-secret environment values.
 The platform grants its agent identity default model/session access; external Azure
 resources require additional RBAC. See
 [hosted-agent permissions](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
 
 You can also select the deployed agent in the Foundry playground. Local `az login`
-does **not** authenticate the deployed container. The MCP endpoint is still public,
+does **not** authenticate the deployed runtime. The MCP endpoint is still public,
 and must remain reachable from the hosted runtime.
 
 ### Cleanup
@@ -181,9 +163,8 @@ with DefaultAzureCredential() as credential, AIProjectClient(
 PY
 ```
 
-Adjust the name if you deployed with `--name`. Delete the sample's image tags in ACR
-when no longer needed; leave shared project/model/registry resources intact. Hosted
-compute, model calls, registry storage, and ACR builds may incur charges.
+Adjust the name if you deployed with `--name`. Leave shared project/model resources
+intact. Hosted compute, remote builds, and model calls may incur charges.
 
 ## Tests
 
@@ -194,7 +175,8 @@ pytest
 
 Tests run offline: configuration, MCP/model wiring, CLI resource cleanup (including
 errors), request-scoped hosting, real Responses adapter requests with a fake model,
-deployment payload/status handling, and hosted invocation. They do not prove live
+ZIP contents and entry point, deployment payload/status/routing/error handling,
+temporary-file cleanup, and hosted invocation. They do not prove live
 Azure permissions, image provisioning, or external MCP availability; use the three
 run paths above for those checks.
 
@@ -206,12 +188,13 @@ run paths above for those checks.
 | `app/config.py` | Shared endpoint and model configuration. |
 | `app/run_agent.py` | Local one-shot CLI. |
 | `app/host.py` | Responses host, used locally and in Foundry. |
-| `app/deploy.py` | Register a container version and wait for readiness. |
+| `app/deploy.py` | Package/upload Python source, wait for readiness, and route the endpoint. |
 | `app/invoke.py` | Call the deployed agent's Responses endpoint. |
-| `Dockerfile` | Identical HTTP host packaged for Foundry. |
+| `main.py` | ZIP-root entry point that starts the shared HTTP host in Foundry. |
 
 ## References
 
 - [Agent Framework Foundry hosting](https://learn.microsoft.com/agent-framework/hosting/foundry-hosted-agent)
+- [Hosted agent quickstart (Python ZIP)](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-hosted-agent?pivots=python)
 - [Deploy a Foundry hosted agent](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent)
 - [Microsoft Learn MCP server](https://learn.microsoft.com/training/support/mcp)

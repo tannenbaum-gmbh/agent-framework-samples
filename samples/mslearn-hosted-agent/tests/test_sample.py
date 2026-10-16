@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import runpy
 from collections.abc import AsyncIterator, Mapping, Sequence
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -156,36 +159,143 @@ def test_real_responses_host_serves_offline_agent() -> None:
     asyncio.run(scenario())
 
 
-def test_deploy_registers_responses_container(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_zip_contains_only_runtime_files(tmp_path: Path) -> None:
+    source_dir = Path(__file__).resolve().parent.parent
+    staged = tmp_path / "source"
+    staged.mkdir()
+    expected = {
+        "main.py", "requirements.txt", "app/__init__.py",
+        "app/agent.py", "app/config.py", "app/host.py",
+    }
+    for name in expected:
+        target = staged / name
+        target.parent.mkdir(exist_ok=True)
+        target.write_bytes((source_dir / name).read_bytes())
+    for name in (".env", ".env.production", "tests/test_sample.py", ".venv/token", "app/__pycache__/host.pyc"):
+        target = staged / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("must not be uploaded")
+    zip_path = tmp_path / "agent.zip"
+
+    deploy.create_code_zip(staged, zip_path)
+
+    with ZipFile(zip_path) as archive:
+        assert set(archive.namelist()) == expected
+        for name in expected:
+            assert archive.read(name) == (source_dir / name).read_bytes()
+
+
+def test_zip_requires_runtime_files(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        deploy.create_code_zip(tmp_path, tmp_path / "agent.zip")
+
+
+def test_runtime_entry_point_starts_shared_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    main = MagicMock()
+    monkeypatch.setattr(host, "main", main)
+
+    runpy.run_path(str(Path(__file__).resolve().parent.parent / "main.py"), run_name="__main__")
+
+    main.assert_called_once_with()
+
+
+def test_deploy_uploads_and_routes_responses_code(monkeypatch: pytest.MonkeyPatch) -> None:
     project = MagicMock()
     project.__enter__.return_value = project
-    project.agents.create_version.return_value.name = "mslearn-agent"
-    project.agents.create_version.return_value.version = "3"
+    project.agents.create_version_from_code.return_value.name = "custom-agent"
+    project.agents.create_version_from_code.return_value.version = "3"
     project.agents.get_version.return_value = {"status": "active"}
+    zip_paths: list[Path] = []
+
+    def check_upload(**kwargs: object) -> MagicMock:
+        code = project.agents.create_version_from_code.call_args.kwargs["code"]
+        zip_paths.append(Path(code.name))
+        assert not code.closed
+        with ZipFile(code) as archive:
+            assert "main.py" in archive.namelist()
+            assert "requirements.txt" in archive.namelist()
+        return project.agents.create_version_from_code.return_value
+
+    project.agents.create_version_from_code.side_effect = check_upload
     monkeypatch.setattr(deploy, "get_settings", lambda: SETTINGS)
-    monkeypatch.setattr(deploy, "DefaultAzureCredential", MagicMock())
+    credential = MagicMock()
+    monkeypatch.setattr(deploy, "DefaultAzureCredential", credential)
     monkeypatch.setattr(deploy, "AIProjectClient", MagicMock(return_value=project))
-    monkeypatch.setattr("sys.argv", ["deploy", "--image", "example.azurecr.io/mslearn-agent:v1"])
+    monkeypatch.setattr("sys.argv", ["deploy", "--name", "custom-agent"])
 
     deploy.main()
 
-    definition = project.agents.create_version.call_args.kwargs["definition"].as_dict()
+    upload = project.agents.create_version_from_code.call_args.kwargs
+    assert project.agents.create_version_from_code.call_count == 1
+    assert upload["agent_name"] == "custom-agent"
+    assert upload["code"].closed
+    assert zip_paths and not zip_paths[0].parent.exists()
+    definition = upload["definition"].as_dict()
     assert definition["kind"] == "hosted"
     assert definition["protocol_versions"] == [{"protocol": "responses", "version": "2.0.0"}]
-    assert definition["container_configuration"]["image"] == "example.azurecr.io/mslearn-agent:v1"
+    assert "container_configuration" not in definition
+    assert definition["code_configuration"] == {
+        "runtime": "python_3_14",
+        "entry_point": ["python", "main.py"],
+        "dependency_resolution": "remote_build",
+    }
     assert definition["environment_variables"] == {
         "FOUNDRY_PROJECT_ENDPOINT": SETTINGS.project_endpoint,
-        "FOUNDRY_MODEL_DEPLOYMENT": "gpt-5",
+        "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5",
     }
-    project.agents.get_version.assert_called_once_with(agent_name="mslearn-agent", agent_version="3")
+    project.agents.get_version.assert_called_once_with(agent_name="custom-agent", agent_version="3")
+    route = project.agents.update_details.call_args.kwargs
+    assert project.agents.update_details.call_count == 1
+    assert route["agent_name"] == "custom-agent"
+    assert route["agent_endpoint"].as_dict() == {
+        "version_selector": {
+            "version_selection_rules": [
+                {"type": "FixedRatio", "agent_version": "3", "traffic_percentage": 100}
+            ]
+        },
+        "protocol_configuration": {"responses": {}},
+    }
+    assert [call[0] for call in project.agents.mock_calls] == [
+        "create_version_from_code", "get_version", "update_details"
+    ]
+    project.agents.delete_version.assert_not_called()
+    project.__exit__.assert_called_once()
+    credential.return_value.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["upload", "provisioning", "routing"])
+def test_deploy_surfaces_failures_and_cleans_zip(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    project = MagicMock()
+    project.__enter__.return_value = project
+    project.agents.create_version_from_code.return_value.version = "3"
+    project.agents.get_version.return_value = {"status": "active"}
+    if failure == "upload":
+        project.agents.create_version_from_code.side_effect = RuntimeError("Upload failed")
+    elif failure == "provisioning":
+        project.agents.get_version.return_value = {"status": "failed", "error": "Remote build failed"}
+    else:
+        project.agents.update_details.side_effect = RuntimeError("Routing failed")
+    monkeypatch.setattr(deploy, "get_settings", lambda: SETTINGS)
+    monkeypatch.setattr(deploy, "DefaultAzureCredential", MagicMock())
+    monkeypatch.setattr(deploy, "AIProjectClient", MagicMock(return_value=project))
+    monkeypatch.setattr("sys.argv", ["deploy"])
+
+    with pytest.raises(RuntimeError, match="failed"):
+        deploy.main()
+
+    code = project.agents.create_version_from_code.call_args.kwargs["code"]
+    assert code.closed
+    assert not Path(code.name).parent.exists()
+    if failure != "routing":
+        project.agents.update_details.assert_not_called()
     project.__exit__.assert_called_once()
 
 
 @pytest.mark.parametrize("status", ["failed", "deleted", "deleting"])
 def test_provisioning_failure_is_explicit(status: str) -> None:
     project = MagicMock()
-    project.agents.get_version.return_value = {"status": status, "error": "Image pull failed"}
-    with pytest.raises(RuntimeError, match="Image pull failed"):
+    project.agents.get_version.return_value = {"status": status, "error": "Remote build failed"}
+    with pytest.raises(RuntimeError, match="Remote build failed"):
         deploy.wait_until_active(project, "mslearn-agent", "1")
 
 
