@@ -65,10 +65,10 @@ def create_definition(
         model=settings.model_deployment,
         instructions=INSTRUCTIONS,
         tools=[
-            A2ATool(
-                a2a_version=A2AProtocolVersion.V1_0,
-                project_connection_id=a2a_connection_id,
-            ),
+            # A2ATool(
+            #     a2a_version=A2AProtocolVersion.V1_0,
+            #     project_connection_id=a2a_connection_id,
+            # ),
             FileSearchTool(vector_store_ids=[vector_store_id]),
         ],
     )
