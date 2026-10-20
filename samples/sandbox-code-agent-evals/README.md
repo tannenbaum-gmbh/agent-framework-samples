@@ -88,6 +88,33 @@ Quality gate passed.
 Open the report URL to inspect each conversation, the generated Python, the sandbox output,
 and the per-evaluator reasoning in the Foundry portal.
 
+### Debugging a delayed or missing result
+
+```bash
+python -m app.evaluate --debug --eval-timeout 600
+```
+
+The sample wraps the entire `evaluate_agent(...)` await in `asyncio.wait_for`, with a
+600-second deadline by default. This includes agent queries, evaluation/run creation,
+Foundry polling, and output-item retrieval. On expiry, Python cancels the local evaluation
+coroutine, runs sandbox cleanup, and exits non-zero with an explicit timeout message.
+This does not cancel the remote Foundry run, which may still finish in the portal.
+
+Logs distinguish the evaluation await returning from sandbox deletion finishing. With
+`--debug`, SDK polling messages show the run ID, status, and remaining polling time;
+HTTP request logs show polling and output-item retrieval without enabling body logging.
+Do not enable global HTTP/SDK DEBUG logging when sharing logs, as it can expose inputs.
+
+Sandbox cleanup is outside the deadline so that timeout cancellation does not skip
+deleting the billed sandbox. `asyncio.wait_for` waits for cancellation to finish, so
+non-cooperative code or slow cleanup can delay the function's return beyond the deadline.
+If the process still waits, check the phase messages and `/output_items` HTTP requests.
+
+`--eval-timeout` does not configure `FoundryEvals`: its SDK polling timeout remains
+independent (180 seconds by default). A run taking 3 minutes 25 seconds can still exceed
+that inner timeout before the outer deadline. Such a result fails the quality gate and
+reports its evaluation/run IDs; the outer deadline cannot extend an inner SDK timeout.
+
 ## Configuration
 
 | Variable | Description |
