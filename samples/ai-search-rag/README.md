@@ -211,10 +211,13 @@ to validate RBAC, networking, model deployments, and end-to-end search quality.
 ## Follow-up: Foundry IQ
 
 This sample deliberately establishes the classic baseline: explicit indexer
-resources plus application-controlled retrieve-then-generate. A follow-up can
-reuse the corpus and existing Azure resources to compare Foundry IQ knowledge
-sources/knowledge bases and agentic retrieval. Those features are not configured
-here, and the classic chunk index is not automatically a Foundry IQ knowledge base.
+resources plus application-controlled retrieve-then-generate. The
+[Foundry IQ sample](../foundry-iq/README.md) reuses this populated chunk index,
+adds an additive semantic configuration, and combines it with live Microsoft
+Learn MCP and web knowledge sources inside one knowledge base. Those features
+are not configured here, and the classic chunk index is not automatically a
+Foundry IQ knowledge base. If you rerun this sample's create command afterward,
+rerun the Foundry IQ create command to restore its semantic configuration.
 
 ## References
 
