@@ -12,6 +12,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 | [`samples/prompt-agent/`](samples/prompt-agent) | A minimal prompt agent that sends one prompt to a Microsoft Foundry model and prints the response. |
 | [`samples/mslearn-prompt-agent/`](samples/mslearn-prompt-agent) | A persistent Foundry prompt agent with Microsoft Learn MCP tools, designed for comparison with the hosted-agent sample. |
 | [`samples/enterprise-architect-prompt-agent/`](samples/enterprise-architect-prompt-agent) | An enterprise architect prompt agent using A2A to consult the Microsoft Learn agent and Foundry file search for internal architecture guidelines. |
+| [`samples/ai-search-rag/`](samples/ai-search-rag) | Classic AI Search RAG: upload the shared architecture guidelines to existing Blob Storage, configure and run an integrated-vectorization indexer, then retrieve chunks and generate grounded answers. |
 | [`samples/architecture-review-workflow/`](samples/architecture-review-workflow) | An explicit Agent Framework workflow: existing enterprise architect draft, independent Microsoft Learn A2A 1.0 review, and architect final recommendation. |
 | [`samples/sequential-workflow-api/`](samples/sequential-workflow-api) | A 2-agent sequential workflow (researcher → writer) built with Agent Framework and exposed as a FastAPI endpoint, demonstrating concurrent execution across multiple threads/users. |
 | [`samples/conditional-workflow/`](samples/conditional-workflow) | A multi-step content workflow (planner → writer → reviewer) with a conditional revision branch and deterministic tests. |
@@ -27,6 +28,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
    - [`samples/prompt-agent/README.md`](samples/prompt-agent/README.md)
    - [`samples/mslearn-prompt-agent/README.md`](samples/mslearn-prompt-agent/README.md)
    - [`samples/enterprise-architect-prompt-agent/README.md`](samples/enterprise-architect-prompt-agent/README.md)
+   - [`samples/ai-search-rag/README.md`](samples/ai-search-rag/README.md)
    - [`samples/architecture-review-workflow/README.md`](samples/architecture-review-workflow/README.md)
    - [`samples/sequential-workflow-api/README.md`](samples/sequential-workflow-api/README.md)
    - [`samples/conditional-workflow/README.md`](samples/conditional-workflow/README.md)
