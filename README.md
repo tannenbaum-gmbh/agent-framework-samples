@@ -22,6 +22,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 | [`samples/sandbox-code-agent-evals/`](samples/sandbox-code-agent-evals) | An agent that writes and runs Python inside an [Azure Container Apps sandbox](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview), scored with Microsoft Foundry's evaluation service and a CI quality gate. |
 | [`samples/sandbox-hosted-agent/`](samples/sandbox-hosted-agent) | A launcher that executes the Agent Framework process itself inside an ephemeral Azure Container Apps sandbox. |
 | [`samples/agent365-identity-agent/`](samples/agent365-identity-agent) | Builds on the sandbox-hosted agent: creates and manages a Microsoft Entra agent identity blueprint and agent identities for [Microsoft Agent 365](https://learn.microsoft.com/en-us/microsoft-agent-365/developer/agent-365-sdk), then runs the sandboxed agent as that identity, with the Agent 365 SDK resolving its identity. |
+| [`samples/agent365-enterprise-architect/`](samples/agent365-enterprise-architect) | Combines Agent 365 identity-authenticated Foundry calls with the enterprise architect prompt, Microsoft Learn MCP, and the full Work IQ MCP catalog (including SharePoint); Work IQ retains its separate delegated OAuth connection. |
 | [`samples/mslearn-hosted-agent/`](samples/mslearn-hosted-agent) | A Foundry-backed agent with Microsoft Learn MCP tools, using the same agent code as a local CLI, local Responses API, or ZIP-deployed Foundry hosted agent without a container registry. |
 
 ## Getting started
@@ -42,6 +43,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
    - [`samples/sandbox-code-agent-evals/README.md`](samples/sandbox-code-agent-evals/README.md)
    - [`samples/sandbox-hosted-agent/README.md`](samples/sandbox-hosted-agent/README.md)
    - [`samples/agent365-identity-agent/README.md`](samples/agent365-identity-agent/README.md)
+   - [`samples/agent365-enterprise-architect/README.md`](samples/agent365-enterprise-architect/README.md)
    - [`samples/mslearn-hosted-agent/README.md`](samples/mslearn-hosted-agent/README.md)
 
 ### Agent 365 CLI in Codespaces

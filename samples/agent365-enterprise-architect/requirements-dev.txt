@@ -1,0 +1,4 @@
+-r requirements.txt
+-r requirements-sandbox.txt
+
+pytest>=8,<10
