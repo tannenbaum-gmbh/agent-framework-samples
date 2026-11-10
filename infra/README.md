@@ -11,7 +11,9 @@ environment used by the samples in this repository. It provisions:
   [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python)
 - Optionally, an **Azure Container Apps sandbox group** (preview) used by the
   [`sandbox-code-agent-evals`](../samples/sandbox-code-agent-evals) sample to run
-  agent-generated code in isolation
+  agent-generated code in isolation, and by
+  [`microsoft-enterprise-architect-sandbox`](../samples/microsoft-enterprise-architect-sandbox)
+  to host a standalone Responses API service outside Foundry
 
 ## Files
 

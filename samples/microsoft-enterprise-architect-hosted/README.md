@@ -14,6 +14,11 @@ deployment is required. The existing prompt agent is not changed or invoked.
 The default resource name is `mea-hosted-agent`; the display name for publishing
 is **Microsoft Enterprise Architect Hosted**.
 
+For the same architecture hosted **outside Foundry**, see
+[`microsoft-enterprise-architect-sandbox`](../microsoft-enterprise-architect-sandbox):
+an authenticated Responses API service in the existing ACA sandbox group,
+with direct MCP clients and a separate delegated Work IQ sign-in.
+
 ```text
 CLI / Foundry playground / published Teams personal chat
                          |
