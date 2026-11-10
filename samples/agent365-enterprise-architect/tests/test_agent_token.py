@@ -87,3 +87,41 @@ def test_token_errors_are_reported() -> None:
     )
     with pytest.raises(RuntimeError, match="AADSTS7000112"):
         provider.agent_identity_token("agent-app", "scope")
+
+
+def test_obo_uses_agent_identity_assertion_and_never_app_only_resource_grant() -> None:
+    apps: list[FakeApp] = []
+
+    class OboApp(FakeApp):
+        def acquire_token_on_behalf_of(self, **kwargs: Any) -> dict[str, Any]:
+            assert self.client_id == "agent-app"
+            assert self.kwargs["client_credential"]["client_assertion"]() == "exchange-token"
+            assert kwargs == {"user_assertion": "caller-token", "scopes": ["foundry-scope"]}
+            return {"access_token": "delegated-token", "expires_in": 3600}
+
+    provider = AgentIdentityTokenProvider(
+        "tenant", "blueprint-app", assertion_provider=lambda: "mi-token",
+        app_factory=lambda cid, **kw: OboApp(cid, apps, **kw),
+    )
+    token, expires = provider.agent_identity_obo_token("agent-app", "caller-token", "foundry-scope")
+    assert token == "delegated-token" and expires > 0
+    blueprint = next(app for app in apps if app.client_id == "blueprint-app")
+    assert blueprint.calls == [{"scopes": [TOKEN_EXCHANGE_SCOPE], "fmi_path": "agent-app"}]
+    assert next(app for app in apps if app.client_id == "agent-app").calls == []
+
+
+def test_obo_reports_exchange_failure_without_s2s_fallback() -> None:
+    provider, _ = make_provider(client_secret="secret")
+    with pytest.raises(ValueError, match="caller access token"):
+        provider.agent_identity_obo_token("agent-app", " ", "scope")
+
+    class DeniedApp(FakeApp):
+        def acquire_token_on_behalf_of(self, **kwargs: Any) -> dict[str, Any]:
+            return {"error": "invalid_grant", "error_description": "caller consent required"}
+
+    provider = AgentIdentityTokenProvider(
+        "tenant", "blueprint-app", client_secret="secret",
+        app_factory=lambda cid, **kw: DeniedApp(cid, [], **kw),
+    )
+    with pytest.raises(RuntimeError, match="OBO token request failed: caller consent required"):
+        provider.agent_identity_obo_token("agent-app", "caller-token", "scope")

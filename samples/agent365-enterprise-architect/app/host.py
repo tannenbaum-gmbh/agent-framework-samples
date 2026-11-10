@@ -54,7 +54,16 @@ class AgentIdentitySandboxAgent:
         self._settings = settings
         self._client_factory = client_factory
 
-    async def run(self, question: str, *, agent_name: str, version: str) -> AgentRunResult:
+    async def run(
+        self, question: str, *, agent_name: str, version: str, user_assertion: str | None = None,
+        channel_name: str = "cli", conversation_id: str | None = None,
+    ) -> AgentRunResult:
+        if self._settings.auth_mode not in {"obo", "s2s"}:
+            raise ValueError("Authentication mode must be obo or s2s")
+        if self._settings.auth_mode == "obo" and (not user_assertion or not user_assertion.strip()):
+            raise ValueError("A caller access token is required for OBO")
+        if self._settings.auth_mode == "s2s" and user_assertion is not None:
+            raise ValueError("A caller access token must not be supplied in S2S mode")
         group_client, credential = self._client_factory(self._settings)
         sandbox = None
         try:
@@ -67,7 +76,10 @@ class AgentIdentitySandboxAgent:
             )
             sandbox = await poller.result()
             await sandbox.mkdir(WORKSPACE)
-            await self._upload_runtime(sandbox, question, agent_name=agent_name, version=version)
+            request = await self._upload_runtime(
+                sandbox, question, agent_name=agent_name, version=version, user_assertion=user_assertion,
+                channel_name=channel_name, conversation_id=conversation_id,
+            )
 
             install = await sandbox.exec(
                 f"python3 -m pip install --disable-pip-version-check -r {REMOTE_REQUIREMENTS}",
@@ -76,6 +88,10 @@ class AgentIdentitySandboxAgent:
             if install.exit_code != 0:
                 raise RuntimeError(f"Sandbox dependency installation failed:\n{install.stderr}")
 
+            permissions = await sandbox.exec(f"umask 077; touch {REMOTE_REQUEST}; chmod 600 {REMOTE_REQUEST}")
+            if permissions.exit_code != 0:
+                raise RuntimeError(f"Unable to protect sandbox request file:\n{permissions.stderr}")
+            await sandbox.write_file(REMOTE_REQUEST, json.dumps(request))
             result = await sandbox.exec(
                 f"python3 {REMOTE_AGENT} --request {REMOTE_REQUEST}",
                 working_directory=WORKSPACE,
@@ -100,7 +116,10 @@ class AgentIdentitySandboxAgent:
             await group_client.close()
             await credential.close()
 
-    async def _upload_runtime(self, sandbox: Any, question: str, *, agent_name: str, version: str) -> None:
+    async def _upload_runtime(
+        self, sandbox: Any, question: str, *, agent_name: str, version: str, user_assertion: str | None,
+        channel_name: str, conversation_id: str | None,
+    ) -> dict[str, Any]:
         source = Path(__file__).with_name("sandbox_agent.py").read_text(encoding="utf-8")
         requirements = Path(__file__).parents[1].joinpath("requirements-sandbox.txt").read_text(encoding="utf-8")
         request = {
@@ -114,7 +133,12 @@ class AgentIdentitySandboxAgent:
             "agent_name": agent_name,
             "agent_version": version,
             "observability_enabled": self._settings.observability_enabled,
+            "auth_mode": self._settings.auth_mode,
+            "channel_name": channel_name,
+            "conversation_id": conversation_id,
         }
+        if user_assertion is not None:
+            request["user_assertion"] = user_assertion
         if self._settings.observability_enabled:
             request.update(
                 observability_capture_content=self._settings.observability_capture_content,
@@ -135,5 +159,4 @@ class AgentIdentitySandboxAgent:
             f"{WORKSPACE}/agent_token.py", Path(__file__).with_name("agent_token.py").read_text(encoding="utf-8")
         )
         await sandbox.write_file(REMOTE_REQUIREMENTS, requirements)
-        await sandbox.write_file(REMOTE_REQUEST, json.dumps(request))
-        await sandbox.exec(f"chmod 600 {REMOTE_REQUEST}")
+        return request

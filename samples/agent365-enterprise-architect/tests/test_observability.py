@@ -106,10 +106,43 @@ def test_scopes_have_identity_caller_parentage_content_and_s2s_flags(
         assert span.attributes["microsoft.a365.agent.blueprint.id"] == "blueprint"
         assert span.attributes["user.id"] == "sponsor"
         assert span.attributes["user.email"] == "sponsor@example.com"
+        assert span.attributes["microsoft.channel.name"] == "cli"
+        assert span.attributes["gen_ai.conversation.id"]
         assert "gen_ai.output.messages" in span.attributes
         serialized = json.dumps(dict(span.attributes))
         assert ("private prompt" in serialized) is capture_content
         assert ("private answer" in serialized) is capture_content
+
+
+def test_obo_telemetry_attributes_actual_caller_not_sponsor(
+    tracing: tuple[InMemorySpanExporter, dict[str, Any]],
+) -> None:
+    credential = AsyncMock()
+    credential.get_token.return_value = AccessToken("app-only-token", int(time.time()) + 3600)
+    telemetry = observability.SandboxObservability(
+        credential, tenant_id="tenant", agent_id="agent", blueprint_id="blueprint",
+        sponsor_id="sponsor", sponsor_name="Sponsor", sponsor_email="sponsor@example.com",
+        caller_id="actual-caller",
+        channel_name="msteams", conversation_id="conversation-7",
+    )
+
+    async def exercise() -> None:
+        await telemetry.start()
+        try:
+            with telemetry.invocation("question") as invocation:
+                with telemetry.inference("question", "gpt-5") as inference:
+                    telemetry.record_output(inference, "answer")
+                telemetry.record_output(invocation, "answer")
+        finally:
+            await telemetry.close()
+
+    asyncio.run(exercise())
+    credential.get_token.assert_awaited_once_with(observability.OBSERVABILITY_SCOPE)
+    for span in tracing[0].get_finished_spans():
+        assert span.attributes["user.id"] == "actual-caller"
+        assert "sponsor@example.com" not in json.dumps(dict(span.attributes))
+        assert span.attributes["microsoft.channel.name"] == "msteams"
+        assert span.attributes["gen_ai.conversation.id"] == "conversation-7"
 
 
 def test_resolver_rejects_unexpected_identity_and_expired_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,20 +223,30 @@ def test_refresh_loop_renews_token_before_expiry(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize("fail_model", [False, True])
+@pytest.mark.parametrize("auth_mode", ["s2s", "obo"])
 def test_runtime_records_model_response_and_flushes_on_success_or_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     tracing: tuple[InMemorySpanExporter, dict[str, Any]],
     fail_model: bool,
+    auth_mode: str,
 ) -> None:
+    claims = {"appid": "agent", "xms_par_app_azp": "blueprint"}
+    if auth_mode == "obo":
+        claims.update({"oid": "actual-caller", "scp": "user_impersonation", "tid": "tenant"})
     token = jwt.encode(
-        {"appid": "agent", "xms_par_app_azp": "blueprint"},
+        claims,
         "test-signing-key-that-is-long-enough-for-hs256",
         algorithm="HS256",
     )
-    acquire = AsyncMock(return_value=AccessToken(token, int(time.time()) + 3600))
+    acquire = AsyncMock(side_effect=lambda scope: AccessToken(
+        "app-only-export-token" if scope == observability.OBSERVABILITY_SCOPE else token,
+        int(time.time()) + 3600,
+    ))
     close = AsyncMock()
     monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "get_token", acquire)
+    acquire_obo = AsyncMock(return_value=AccessToken(token, int(time.time()) + 3600))
+    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "get_obo_token", acquire_obo)
     monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "close", close)
     def invoke(request: dict[str, Any], access_token: AccessToken) -> str:
         assert access_token.token == token
@@ -219,6 +262,8 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
         "agent_name": "architect", "agent_version": "3",
         "observability_enabled": True, "observability_sponsor_id": "sponsor",
         "observability_sponsor_name": "Sponsor", "observability_sponsor_email": "sponsor@example.com",
+        "auth_mode": auth_mode, **({"user_assertion": "caller-token"} if auth_mode == "obo" else {}),
+        "channel_name": "msteams", "conversation_id": "conversation-7",
     }))
     if fail_model:
         with pytest.raises(RuntimeError, match="model unavailable"):
@@ -226,11 +271,23 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
     else:
         assert asyncio.run(sandbox_agent.run(path))["answer"] == "answer"
     close.assert_awaited_once()
-    assert [call.args for call in acquire.await_args_list] == [
-        (sandbox_agent.FOUNDRY_SCOPE,), (observability.OBSERVABILITY_SCOPE,)
-    ]
+    expected_scopes = (
+        [(observability.OBSERVABILITY_SCOPE,)]
+        if auth_mode == "obo"
+        else [(sandbox_agent.FOUNDRY_SCOPE,), (observability.OBSERVABILITY_SCOPE,)]
+    )
+    assert [call.args for call in acquire.await_args_list] == expected_scopes
+    if auth_mode == "obo":
+        acquire_obo.assert_awaited_once_with("caller-token")
+        assert not path.exists()
+    else:
+        acquire_obo.assert_not_awaited()
     spans = tracing[0].get_finished_spans()
     assert len(spans) == 2
+    for span in spans:
+        assert span.attributes["user.id"] == ("actual-caller" if auth_mode == "obo" else "sponsor")
+        assert span.attributes["microsoft.channel.name"] == "msteams"
+        assert span.attributes["gen_ai.conversation.id"] == "conversation-7"
     if fail_model:
         assert all(span.status.status_code == StatusCode.ERROR for span in spans)
 
@@ -271,6 +328,18 @@ def test_invalid_observability_flag_is_reported(launcher_env: None, monkeypatch:
     monkeypatch.setenv("ENABLE_A365_OBSERVABILITY_EXPORTER", "maybe")
     with pytest.raises(RuntimeError, match="must be true or false"):
         get_settings()
+
+
+@pytest.mark.parametrize("mode", ["obo", "s2s", "invalid"])
+def test_authentication_mode_is_explicit_and_validated(
+    launcher_env: None, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    monkeypatch.setenv("AGENT_AUTH_MODE", mode)
+    if mode == "invalid":
+        with pytest.raises(RuntimeError, match="AGENT_AUTH_MODE must be obo or s2s"):
+            get_settings()
+    else:
+        assert get_settings().auth_mode == mode
 
 
 def test_real_distro_exports_two_scopes_to_s2s_route_in_isolated_process() -> None:

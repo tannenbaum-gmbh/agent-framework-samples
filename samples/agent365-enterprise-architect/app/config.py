@@ -39,6 +39,7 @@ class Settings:
     observability_sponsor_name: str | None = None
     observability_sponsor_email: str | None = None
     workiq_connection_name: str | None = None
+    auth_mode: str = "s2s"
 
 
 def _require(name: str) -> str:
@@ -79,6 +80,9 @@ def get_settings() -> Settings:
     if not identity.blueprint_app_id or not identity.agent_identity_client_id:
         raise RuntimeError("AGENT_BLUEPRINT_APP_ID and AGENT_IDENTITY_CLIENT_ID environment variables are required")
     observability_enabled = _boolean("ENABLE_A365_OBSERVABILITY_EXPORTER")
+    auth_mode = os.environ.get("AGENT_AUTH_MODE", "s2s").strip().lower()
+    if auth_mode not in {"obo", "s2s"}:
+        raise RuntimeError("AGENT_AUTH_MODE must be obo or s2s")
     return Settings(
         foundry_project_endpoint=_require("FOUNDRY_PROJECT_ENDPOINT"),
         foundry_model_deployment=(
@@ -96,4 +100,5 @@ def get_settings() -> Settings:
         observability_sponsor_name=_require("A365_SPONSOR_NAME") if observability_enabled else None,
         observability_sponsor_email=_require("A365_SPONSOR_EMAIL") if observability_enabled else None,
         workiq_connection_name=os.environ.get("WORKIQ_CONNECTION_NAME", "").strip() or None,
+        auth_mode=auth_mode,
     )

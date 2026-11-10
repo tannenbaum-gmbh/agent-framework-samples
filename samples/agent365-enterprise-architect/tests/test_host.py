@@ -189,6 +189,58 @@ def test_sandbox_token_failure_is_reported_and_compute_is_cleaned_up() -> None:
     assert sandbox.deleted and client.closed and credential.closed
 
 
+def test_obo_caller_token_is_only_in_protected_request_and_cleanup_runs() -> None:
+    sandbox = FakeSandbox()
+    client, credential = Closeable(sandbox), Closeable()
+    settings = replace(SETTINGS, auth_mode="obo")
+    agent = AgentIdentitySandboxAgent(settings, client_factory=lambda settings: (client, credential))
+    asyncio.run(agent.run(
+        "question", agent_name="architect", version="1", user_assertion="caller-token",
+        channel_name="msteams", conversation_id="conversation-7",
+    ))
+    request = json.loads(sandbox.files["/workspace/request.json"])
+    assert request["auth_mode"] == "obo"
+    assert request["user_assertion"] == "caller-token"
+    assert request["channel_name"] == "msteams"
+    assert request["conversation_id"] == "conversation-7"
+    assert all("caller-token" not in command for command in sandbox.commands)
+    assert sandbox.commands[0].startswith("python3 -m pip install")
+    assert sandbox.commands[1].startswith("umask 077; touch /workspace/request.json; chmod 600")
+    assert "rm -f /workspace/request.json" in sandbox.commands
+    assert sandbox.deleted and client.closed and credential.closed
+
+
+@pytest.mark.parametrize(
+    ("mode", "token"),
+    [("obo", None), ("obo", " "), ("s2s", "caller-token"), ("invalid", None)],
+)
+def test_invalid_authentication_input_fails_before_creating_sandbox(mode: str, token: str | None) -> None:
+    def unexpected_client(settings: Settings) -> Any:
+        pytest.fail("No sandbox should be created")
+
+    agent = AgentIdentitySandboxAgent(replace(SETTINGS, auth_mode=mode), client_factory=unexpected_client)
+    with pytest.raises(ValueError):
+        asyncio.run(agent.run("question", agent_name="architect", version="1", user_assertion=token))
+
+
+def test_request_permission_failure_prevents_token_upload_and_deletes_sandbox() -> None:
+    class PermissionDeniedSandbox(FakeSandbox):
+        async def exec(self, command: str, **kwargs: Any) -> ExecResult:
+            if command.startswith("umask"):
+                return ExecResult(exit_code=1, stderr="permission denied")
+            return await super().exec(command, **kwargs)
+
+    sandbox = PermissionDeniedSandbox()
+    client, credential = Closeable(sandbox), Closeable()
+    agent = AgentIdentitySandboxAgent(
+        replace(SETTINGS, auth_mode="obo"), client_factory=lambda settings: (client, credential)
+    )
+    with pytest.raises(RuntimeError, match="Unable to protect sandbox request file"):
+        asyncio.run(agent.run("question", agent_name="architect", version="1", user_assertion="caller-token"))
+    assert "/workspace/request.json" not in sandbox.files
+    assert sandbox.deleted and client.closed and credential.closed
+
+
 def _token(claims: dict[str, str]) -> str:
     return jwt.encode(claims, "test-signing-key-that-is-long-enough-for-hs256", algorithm="HS256")
 

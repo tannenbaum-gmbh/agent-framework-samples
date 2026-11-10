@@ -117,3 +117,15 @@ class AgentIdentityTokenProvider:
         result = self._agent_app(agent_identity_client_id).acquire_token_for_client([scope])
         token = _require_token(result, "Agent identity token request")
         return token, int(time.time()) + int(result.get("expires_in", 0))
+
+    def agent_identity_obo_token(
+        self, agent_identity_client_id: str, user_assertion: str, scope: str
+    ) -> tuple[str, int]:
+        """Exchange a caller token audienced to the blueprint for a delegated resource token."""
+        if not user_assertion.strip():
+            raise ValueError("A caller access token is required for OBO")
+        result = self._agent_app(agent_identity_client_id).acquire_token_on_behalf_of(
+            user_assertion=user_assertion, scopes=[scope]
+        )
+        token = _require_token(result, "Agent identity OBO token request")
+        return token, int(time.time()) + int(result.get("expires_in", 0))

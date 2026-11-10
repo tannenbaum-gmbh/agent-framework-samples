@@ -7,3 +7,4 @@ microsoft-agents-a365-runtime>=2.0,<3
 microsoft-agents-authentication-msal>=1.9,<2
 microsoft-opentelemetry>=1.6,<2
 msal>=1.39,<2
+PyJWT>=2.10,<3

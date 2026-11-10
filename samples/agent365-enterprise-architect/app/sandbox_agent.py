@@ -9,8 +9,10 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 
+import jwt
 from azure.core.credentials import AccessToken
 from azure.core.credentials_async import AsyncTokenCredential
 from microsoft_agents.authentication.msal import MsalAuth
@@ -18,7 +20,7 @@ from microsoft_agents.hosting.core import AgentAuthConfiguration, AuthTypes
 from microsoft_agents_a365.runtime import Utility
 from msal import ConfidentialClientApplication, TokenCache
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from .agent_token import OBSERVABILITY_SCOPE, AgentIdentityTokenProvider, managed_identity_assertion
 else:
     from agent_token import OBSERVABILITY_SCOPE, AgentIdentityTokenProvider, managed_identity_assertion
@@ -64,10 +66,24 @@ class AgentIdentityCredential(AsyncTokenCredential):
     async def get_token(self, *scopes: str, **kwargs: Any) -> AccessToken:
         if len(scopes) != 1 or scopes[0] not in {FOUNDRY_SCOPE, OBSERVABILITY_SCOPE}:
             raise ValueError(f"This credential only supports {FOUNDRY_SCOPE} or {OBSERVABILITY_SCOPE}")
+        return await self._acquire_token(scopes[0])
+
+    async def get_obo_token(self, user_assertion: str) -> AccessToken:
+        if not user_assertion.strip():
+            raise ValueError("A caller access token is required for OBO")
+        return await self._acquire_token(FOUNDRY_SCOPE, user_assertion=user_assertion)
+
+    async def _acquire_token(self, scope: str, *, user_assertion: str | None = None) -> AccessToken:
         if self._system_identity_provider is not None:
-            token, expires_on = await asyncio.to_thread(
-                self._system_identity_provider.agent_identity_token, self._agent_client_id, scopes[0]
-            )
+            if user_assertion is None:
+                token, expires_on = await asyncio.to_thread(
+                    self._system_identity_provider.agent_identity_token, self._agent_client_id, scope
+                )
+            else:
+                token, expires_on = await asyncio.to_thread(
+                    self._system_identity_provider.agent_identity_obo_token,
+                    self._agent_client_id, user_assertion, scope,
+                )
             return AccessToken(token, expires_on)
         assert self._connection is not None
         assertion = await self._connection.get_agentic_application_token(self._tenant_id, self._agent_client_id)
@@ -81,7 +97,11 @@ class AgentIdentityCredential(AsyncTokenCredential):
                 client_credential={"client_assertion": assertion},
                 token_cache=self._cache,
             )
-            result = app.acquire_token_for_client(list(scopes))
+            result = (
+                app.acquire_token_for_client([scope])
+                if user_assertion is None
+                else app.acquire_token_on_behalf_of(user_assertion=user_assertion, scopes=[scope])
+            )
             if "access_token" not in result:
                 detail = result.get("error_description") or result.get("error") or "unknown error"
                 raise RuntimeError(f"Agent identity token request failed: {detail}")
@@ -92,6 +112,15 @@ class AgentIdentityCredential(AsyncTokenCredential):
 
     async def close(self) -> None:
         """No asynchronous transport is owned by this credential."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None = None, exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> None:
+        await self.close()
 
 
 class AgentIdentityAccessTokenCredential:
@@ -167,8 +196,18 @@ def describe_identity(token: str, expected_agent_identity: str) -> dict[str, str
 
 
 async def run(request_path: Path) -> dict[str, Any]:
-    """Run one request through an agent that authenticates as its own agent identity."""
+    """Run one request; Microsoft Entra validates caller assertions during OBO exchange."""
     request = json.loads(request_path.read_text(encoding="utf-8"))
+    user_assertion = request.pop("user_assertion", None)
+    if user_assertion is not None:
+        request_path.unlink()
+    auth_mode = request.get("auth_mode", "s2s")
+    if auth_mode not in {"obo", "s2s"}:
+        raise ValueError("Authentication mode must be obo or s2s")
+    if auth_mode == "obo" and (not isinstance(user_assertion, str) or not user_assertion.strip()):
+        raise ValueError("A caller access token is required for OBO")
+    if auth_mode == "s2s" and user_assertion is not None:
+        raise ValueError("A caller access token must not be supplied in S2S mode")
     credential = AgentIdentityCredential(
         request["tenant_id"],
         request["blueprint_app_id"],
@@ -177,16 +216,30 @@ async def run(request_path: Path) -> dict[str, Any]:
     )
     telemetry: SandboxObservability | None = None
     try:
-        token = await credential.get_token(FOUNDRY_SCOPE)
+        token = (
+            await credential.get_obo_token(user_assertion)
+            if auth_mode == "obo"
+            else await credential.get_token(FOUNDRY_SCOPE)
+        )
         identity = describe_identity(token.token, request["agent_identity_client_id"])
         if identity["blueprint"] != request["blueprint_app_id"]:
             raise RuntimeError(f"Token blueprint does not match expected blueprint {request['blueprint_app_id']}")
+
+        caller_id = None
+        if auth_mode == "obo":
+            # Inspect only the result of Entra's successful exchange, never trust caller-supplied claims.
+            claims = jwt.decode(token.token, options={"verify_signature": False})
+            caller_id = claims.get("oid")
+            if not isinstance(caller_id, str) or not caller_id or not claims.get("scp"):
+                raise RuntimeError("OBO token must contain a delegated scope and caller object ID")
+            if claims.get("tid") != request["tenant_id"]:
+                raise RuntimeError("OBO token tenant does not match the configured tenant")
 
         if request.get("observability_enabled", False):
             for name in ("OTEL_LOG_LEVEL", "A365_OBSERVABILITY_LOG_LEVEL"):
                 if name in request:
                     os.environ[name] = request[name]
-            if __package__:
+            if TYPE_CHECKING or __package__:
                 from .observability import SandboxObservability
             else:
                 from observability import SandboxObservability
@@ -199,6 +252,9 @@ async def run(request_path: Path) -> dict[str, Any]:
                 sponsor_name=request["observability_sponsor_name"],
                 sponsor_email=request["observability_sponsor_email"],
                 capture_content=request.get("observability_capture_content", False),
+                caller_id=caller_id,
+                channel_name=request.get("channel_name", "cli"),
+                conversation_id=request.get("conversation_id"),
             )
             await telemetry.start()
 

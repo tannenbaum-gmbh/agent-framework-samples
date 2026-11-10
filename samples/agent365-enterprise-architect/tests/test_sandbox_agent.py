@@ -187,6 +187,108 @@ def test_credential_requires_agent_identity_configuration() -> None:
         sandbox_agent.AgentIdentityCredential("tenant", "", "agent", None)
 
 
+def test_credential_supports_azure_async_context_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential = make_credential()
+    close = AsyncMock()
+    monkeypatch.setattr(credential, "close", close)
+
+    async def exercise() -> None:
+        async with credential as entered:
+            assert entered is credential
+
+    asyncio.run(exercise())
+    close.assert_awaited_once()
+
+
+def test_obo_credential_exchanges_caller_token_but_telemetry_remains_app_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = make_credential()
+    monkeypatch.setattr(credential._connection, "get_agentic_application_token", AsyncMock(return_value="fmi-token"))
+    calls: list[str] = []
+
+    class FakeApp:
+        def __init__(self, client_id: str, **kwargs: Any) -> None:
+            assert client_id == "agent-app"
+            assert kwargs["client_credential"] == {"client_assertion": "fmi-token"}
+
+        def acquire_token_on_behalf_of(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs == {"user_assertion": "caller-token", "scopes": [sandbox_agent.FOUNDRY_SCOPE]}
+            calls.append("obo")
+            return {"access_token": "delegated-token", "expires_in": 3600}
+
+        def acquire_token_for_client(self, scopes: list[str]) -> dict[str, Any]:
+            assert scopes == [sandbox_agent.OBSERVABILITY_SCOPE]
+            calls.append("s2s")
+            return {"access_token": "telemetry-token", "expires_in": 3600}
+
+    monkeypatch.setattr(sandbox_agent, "ConfidentialClientApplication", FakeApp)
+
+    async def exercise() -> None:
+        assert (await credential.get_obo_token("caller-token")).token == "delegated-token"
+        assert (await credential.get_token(sandbox_agent.OBSERVABILITY_SCOPE)).token == "telemetry-token"
+        with pytest.raises(ValueError, match="caller access token"):
+            await credential.get_obo_token(" ")
+
+    asyncio.run(exercise())
+    assert calls == ["obo", "s2s"]
+
+
+def test_system_assigned_identity_supports_obo(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.agent_token import AgentIdentityTokenProvider
+
+    def acquire(self: Any, agent: str, assertion: str, scope: str) -> tuple[str, int]:
+        assert (agent, assertion, scope) == ("agent", "caller-token", sandbox_agent.FOUNDRY_SCOPE)
+        return "delegated-token", 2_000_000_000
+
+    monkeypatch.setattr(AgentIdentityTokenProvider, "agent_identity_obo_token", acquire)
+    credential = sandbox_agent.AgentIdentityCredential("tenant", "blueprint", "agent", None)
+    assert asyncio.run(credential.get_obo_token("caller-token")).token == "delegated-token"
+
+
+@pytest.mark.parametrize("failure", [None, "consent required", "missing caller", "wrong tenant"])
+def test_obo_runtime_removes_assertion_before_model_call_even_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps({
+        "tenant_id": "tenant", "blueprint_app_id": "blueprint-app",
+        "agent_identity_client_id": "agent-app", "auth_mode": "obo",
+        "user_assertion": "caller-token", "question": "hello",
+    }))
+    claims = {
+        "azp": "agent-app", "xms_par_app_azp": "blueprint-app",
+        "oid": "caller", "scp": "user_impersonation", "tid": "tenant",
+    }
+    if failure == "missing caller":
+        del claims["oid"]
+    if failure == "wrong tenant":
+        claims["tid"] = "other-tenant"
+    token = AccessToken(jwt.encode(claims, "test-signing-key-that-is-long-enough-for-hs256"), 2_000_000_000)
+    acquire = AsyncMock(return_value=token)
+    if failure == "consent required":
+        acquire.side_effect = RuntimeError(failure)
+    app_only = AsyncMock(side_effect=AssertionError("Must not fall back to app-only Foundry token"))
+    close = AsyncMock()
+    invoke = MagicMock(return_value="answer")
+    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "get_obo_token", acquire)
+    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "get_token", app_only)
+    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "close", close)
+    monkeypatch.setattr(sandbox_agent, "invoke_prompt_agent", invoke)
+    if failure:
+        with pytest.raises(RuntimeError):
+            asyncio.run(sandbox_agent.run(path))
+        invoke.assert_not_called()
+    else:
+        assert asyncio.run(sandbox_agent.run(path))["answer"] == "answer"
+        assert "user_assertion" not in invoke.call_args.args[0]
+        assert invoke.call_args.args[1] == token
+    acquire.assert_awaited_once_with("caller-token")
+    app_only.assert_not_awaited()
+    close.assert_awaited_once()
+    assert not path.exists()
+
+
 @pytest.mark.parametrize(
     ("agent_id", "blueprint_id", "error"),
     [

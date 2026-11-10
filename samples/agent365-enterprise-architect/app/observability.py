@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from typing import Generator
+from typing import TYPE_CHECKING, Generator
 from uuid import uuid4
 
 from azure.core.credentials import AccessToken
@@ -30,7 +30,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from .agent_token import OBSERVABILITY_SCOPE
 else:
     from agent_token import OBSERVABILITY_SCOPE
@@ -52,6 +52,9 @@ class SandboxObservability:
         sponsor_name: str,
         sponsor_email: str,
         capture_content: bool = False,
+        caller_id: str | None = None,
+        channel_name: str = "cli",
+        conversation_id: str | None = None,
     ) -> None:
         if not all((tenant_id, agent_id, blueprint_id, sponsor_id, sponsor_name, sponsor_email)):
             raise ValueError("Observability requires tenant, agent, blueprint, and sponsor details")
@@ -62,17 +65,24 @@ class SandboxObservability:
         self._agent_id = agent_id
         self._blueprint_id = blueprint_id
         self._capture_content = capture_content
+        self._caller_id = caller_id
+        self._channel_name = channel_name
         self._token: AccessToken | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         self._provider: TracerProvider | None = None
         self._session_id = str(uuid4())
+        self._conversation_id = conversation_id or self._session_id
         self.agent_details = AgentDetails(
             agent_id=agent_id,
             agent_name=AGENT_NAME,
             agent_blueprint_id=blueprint_id,
             tenant_id=tenant_id,
         )
-        self.user_details = UserDetails(user_id=sponsor_id, user_name=sponsor_name, user_email=sponsor_email)
+        self.user_details = (
+            UserDetails(user_id=caller_id)
+            if caller_id is not None
+            else UserDetails(user_id=sponsor_id, user_name=sponsor_name, user_email=sponsor_email)
+        )
         self.caller_details = CallerDetails(user_details=self.user_details)
 
     def resolve_token(self, agent_id: str, tenant_id: str) -> str:
@@ -130,7 +140,7 @@ class SandboxObservability:
         return Request(
             content=content if self._capture_content else "[content omitted]",
             session_id=self._session_id,
-            conversation_id=self._session_id,
+            conversation_id=self._conversation_id,
         )
 
     @contextmanager
@@ -141,6 +151,9 @@ class SandboxObservability:
             .agent_id(self._agent_id)
             .agent_blueprint_id(self._blueprint_id)
             .session_id(self._session_id)
+            .conversation_id(self._conversation_id)
+            .channel_name(self._channel_name)
+            .operation_source("HumanToAgent" if self._caller_id is not None else "EventToAgent")
             .user_id(self.user_details.user_id)
             .user_name(self.user_details.user_name)
             .user_email(self.user_details.user_email)
