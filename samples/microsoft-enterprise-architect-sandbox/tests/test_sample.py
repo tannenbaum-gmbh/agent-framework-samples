@@ -12,7 +12,8 @@ import httpx
 import httpx2
 import pytest
 from azure.core.credentials import AccessToken
-from openai import AsyncOpenAI
+from azure.identity import CredentialUnavailableError
+from openai import AsyncOpenAI, OpenAI
 
 from app import agent, host, invoke, service
 from app.config import RuntimeSettings, Settings, get_settings
@@ -21,7 +22,7 @@ from app.tokens import FOUNDRY_SCOPE, WORKIQ_SCOPE, FileTokenCredential, read_to
 RUNTIME = RuntimeSettings(
     "https://example.services.ai.azure.com/api/projects/demo", "workshop-model", "k" * 40,
 )
-SETTINGS = Settings(RUNTIME, "subscription", "rg", "existing-group", "eastus", "tenant", "app")
+SETTINGS = Settings(RUNTIME, "subscription", "rg", "existing-group", "eastus")
 
 
 @pytest.fixture(autouse=True)
@@ -53,8 +54,6 @@ def test_settings_require_configuration_and_reject_weak_key(monkeypatch):
         "AZURE_RESOURCE_GROUP": "rg",
         "AZURE_SANDBOX_GROUP": "existing-group",
         "AZURE_SANDBOX_REGION": "eastus",
-        "AZURE_TENANT_ID": "tenant",
-        "WORKIQ_CLIENT_ID": "app",
     }.items():
         monkeypatch.setenv(name, value)
     assert get_settings().runtime.model_deployment == "gpt-5.3-codex-2"
@@ -80,7 +79,7 @@ def test_token_expiry_audience_and_refresh(tmp_path):
         read_token(path, "workiq")
 
 
-def test_agent_wires_direct_catalogs_and_dynamic_workiq_headers(monkeypatch, tmp_path):
+def test_agent_wires_direct_catalogs_and_caller_workiq_headers(monkeypatch, tmp_path):
     path = tmp_path / "tokens.json"
     write_tokens(path)
     tools = MagicMock()
@@ -89,7 +88,7 @@ def test_agent_wires_direct_catalogs_and_dynamic_workiq_headers(monkeypatch, tmp
     monkeypatch.setattr(agent, "MCPStreamableHTTPTool", tools)
     monkeypatch.setattr(agent, "FoundryChatClient", model)
     monkeypatch.setattr(agent, "Agent", factory)
-    agent.create_agent(RUNTIME, path)
+    agent.create_agent(RUNTIME, path, "caller-token")
     options = factory.call_args.kwargs
     assert options["default_options"] == {"store": False}
     assert "Mermaid" in options["instructions"]
@@ -103,9 +102,11 @@ def test_agent_wires_direct_catalogs_and_dynamic_workiq_headers(monkeypatch, tmp
         assert "allowed_tools" not in tool
         assert "project_connection_id" not in tool
     assert "header_provider" not in learn
-    assert workiq["header_provider"]({}) == {"Authorization": "Bearer workiq"}
+    assert workiq["header_provider"]({}) == {"Authorization": "Bearer caller-token"}
     write_tokens(path, suffix="-refreshed")
-    assert workiq["header_provider"]({}) == {"Authorization": "Bearer workiq-refreshed"}
+    assert workiq["header_provider"]({}) == {"Authorization": "Bearer caller-token"}
+    with pytest.raises(ValueError, match="caller Work IQ"):
+        agent.create_agent(RUNTIME, path, " ")
 
 
 @pytest.mark.parametrize("route", ["/readiness", "/responses", "/responses/private", "/_before_snapshot"])
@@ -121,13 +122,88 @@ async def test_auth_protects_every_route_without_creating_agent(monkeypatch, tmp
         }):
             response = await client.post(route, headers=headers, json={"input": "hello"})
             assert response.status_code == 401
-            assert response.headers["WWW-Authenticate"] == "Bearer"
         duplicate = await client.get(route, headers=[
-            ("Authorization", f"Bearer {RUNTIME.api_key}"),
-            ("Authorization", f"Bearer {RUNTIME.api_key}"),
+            ("X-API-Key", RUNTIME.api_key),
+            ("X-API-Key", RUNTIME.api_key),
         ])
         assert duplicate.status_code == 401
     create.assert_not_called()
+
+
+@pytest.mark.parametrize("authorization", [
+    [], [("Authorization", "Basic caller")], [("Authorization", "Bearer ")],
+    [("Authorization", "Bearer token with spaces")],
+    [("Authorization", "Bearer first"), ("Authorization", "Bearer second")],
+])
+async def test_responses_requires_one_caller_bearer_token(monkeypatch, tmp_path, authorization):
+    create = MagicMock()
+    monkeypatch.setattr(service, "create_agent", create)
+    server = service.create_server(RUNTIME, tmp_path / "tokens.json")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server), base_url="http://test",
+    ) as client:
+        result = await client.post(
+            "/responses", headers=[("X-API-Key", RUNTIME.api_key), *authorization],
+            json={"input": "hello", "store": False},
+        )
+    assert result.status_code == 401
+    assert result.headers["WWW-Authenticate"] == "Bearer"
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+    {"input": "hello"}, {"store": True}, {"store": False, "background": True},
+    {"store": False, "previous_response_id": "another-caller"},
+    {"store": False, "conversation": "another-caller"}, [], None,
+])
+async def test_caller_tokens_cannot_be_used_with_shared_or_background_state(monkeypatch, tmp_path, payload):
+    create = MagicMock()
+    monkeypatch.setattr(service, "create_agent", create)
+    server = service.create_server(RUNTIME, tmp_path / "tokens.json")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server), base_url="http://test",
+        headers={"X-API-Key": RUNTIME.api_key, "Authorization": "Bearer caller"},
+    ) as client:
+        result = await client.post("/responses", content=json.dumps(payload))
+        assert result.status_code == 400
+        assert (await client.get("/responses/private")).status_code == 404
+    create.assert_not_called()
+
+
+async def test_request_token_context_is_isolated_concurrently_and_reset_on_error():
+    observed = {}
+    both_entered = asyncio.Event()
+
+    async def app(scope, receive, send):
+        body = await receive()
+        assert body["body"]
+        observed[scope["caller"]] = service._caller_token.get()
+        if len(observed) == 2:
+            both_entered.set()
+        await both_entered.wait()
+        assert service._caller_token.get() == observed[scope["caller"]]
+        raise RuntimeError("downstream failure")
+
+    middleware = service.BearerAuth(app, RUNTIME.api_key)
+
+    async def request(token):
+        async def receive():
+            return {"type": "http.request", "body": b'{"store":false}'}
+
+        with pytest.raises(RuntimeError, match="downstream failure"):
+            await middleware({
+                "type": "http", "method": "POST", "path": "/responses",
+                "headers": [
+                    (b"x-api-key", RUNTIME.api_key.encode()),
+                    (b"authorization", f"Bearer {token}".encode()),
+                ],
+                "caller": token,
+            }, receive, AsyncMock())
+        with pytest.raises(LookupError):
+            service._caller_token.get()
+
+    await asyncio.gather(request("first"), request("second"))
+    assert observed == {"first": "first", "second": "second"}
 
 
 async def test_real_responses_http_with_model_and_mcp_transports(monkeypatch, tmp_path):
@@ -144,6 +220,8 @@ async def test_real_responses_http_with_model_and_mcp_transports(monkeypatch, tm
         payload = json.loads(request.content)
         assert payload["model"] == RUNTIME.model_deployment
         assert payload["store"] is False
+        assert request.headers["authorization"] == "Bearer offline-model-token"
+        assert "x-api-key" not in request.headers
         assert not any(key.startswith("x-agent-foundry") for key in request.headers)
         assert {tool["name"] for tool in payload["tools"]} == {"MicrosoftLearn_lookup", "WorkIQ_lookup"}
         message = {
@@ -166,6 +244,9 @@ async def test_real_responses_http_with_model_and_mcp_transports(monkeypatch, tm
 
     def mcp_transport(request):
         mcp_requests.append(request)
+        assert "x-api-key" not in request.headers
+        if request.headers.get("authorization") == "Bearer expired-caller":
+            return httpx2.Response(401)
         if request.method != "POST":
             return httpx2.Response(405)
         payload = json.loads(request.content)
@@ -213,29 +294,40 @@ async def test_real_responses_http_with_model_and_mcp_transports(monkeypatch, tm
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server), base_url="http://test",
-            headers={"Authorization": f"Bearer {RUNTIME.api_key}"},
+            headers={"X-API-Key": RUNTIME.api_key},
         ) as client:
             assert (await client.get("/readiness")).status_code == 200
-            for stream in (False, True):
+            for index, stream in enumerate((False, True)):
                 response = await client.post("/responses", json={
                     "input": "Design an architecture", "store": False, "stream": stream,
-                }, headers={"x-agent-foundry-call-id": "do-not-forward"})
+                }, headers={
+                    "x-agent-foundry-call-id": "do-not-forward",
+                    "Authorization": f"Bearer caller-{index}",
+                })
                 assert response.status_code == 200, response.text
                 if not stream:
                     assert response.json()["status"] == "completed", response.text
                 assert "Architecture" in response.text
                 write_tokens(token_path, suffix="-refreshed")
+            failure = await client.post("/responses", json={
+                "input": "Read private documents", "store": False,
+            }, headers={"Authorization": "Bearer expired-caller"})
+            assert failure.status_code == 200
+            assert failure.json()["status"] == "failed"
+            assert "Architecture" not in failure.text
         assert len(model_requests) == 2
         assert mcp_requests
         for request in mcp_requests:
             if request.url.host == "workiq.svc.cloud.microsoft":
-                assert request.headers["authorization"] in ("Bearer workiq", "Bearer workiq-refreshed")
+                assert request.headers["authorization"] in (
+                    "Bearer caller-0", "Bearer caller-1", "Bearer expired-caller",
+                )
             else:
                 assert "authorization" not in request.headers
         assert {
             request.headers.get("authorization") for request in mcp_requests
             if request.url.host == "workiq.svc.cloud.microsoft"
-        } == {"Bearer workiq", "Bearer workiq-refreshed"}
+        } == {"Bearer caller-0", "Bearer caller-1", "Bearer expired-caller"}
     finally:
         for client in clients:
             await client.aclose()
@@ -262,7 +354,7 @@ async def test_supervisor_uploads_only_runtime_and_deletes_own_sandbox(monkeypat
     monkeypatch.setattr(host, "wait_ready", ready)
     stop = asyncio.Event()
     stop.set()
-    await host.serve(SETTINGS, group, token, token, stop)
+    await host.serve(SETTINGS, group, token, stop)
     options = group.begin_create_sandbox.call_args.kwargs
     assert options["disk"] == "python-3.14"
     assert options["auto_suspend_seconds"] == 3600
@@ -275,6 +367,9 @@ async def test_supervisor_uploads_only_runtime_and_deletes_own_sandbox(monkeypat
     for call in sandbox.write_file.call_args_list:
         if call.args[0].endswith(("config.json", "tokens.json.new")):
             assert call.kwargs["mode"] == "0600"
+        if call.args[0].endswith("tokens.json.new"):
+            assert set(json.loads(call.args[1])) == {"foundry"}
+    assert all(call.args == (FOUNDRY_SCOPE,) for call in token.get_token.call_args_list)
     ready.assert_awaited_once_with("https://sandbox.example", RUNTIME.api_key)
     sandbox.delete.assert_awaited_once()
     sandbox.close.assert_awaited_once()
@@ -305,7 +400,7 @@ async def test_supervisor_cleans_up_on_failures(monkeypatch, failure):
             raise TimeoutError
         monkeypatch.setattr(host.asyncio, "wait_for", timeout)
     with pytest.raises(RuntimeError):
-        await host.serve(SETTINGS, group, token, token, asyncio.Event())
+        await host.serve(SETTINGS, group, token, asyncio.Event())
     sandbox.delete.assert_awaited_once()
     sandbox.close.assert_awaited_once()
 
@@ -314,7 +409,7 @@ async def test_atomic_refresh_checks_command_failure():
     sandbox, _, token = fake_sandbox()
     sandbox.exec.return_value.exit_code = 1
     with pytest.raises(RuntimeError, match="atomically"):
-        await host.upload_tokens(sandbox, token, token)
+        await host.upload_tokens(sandbox, token)
 
 
 async def test_supervisor_refreshes_and_stops_cleanly(monkeypatch):
@@ -331,19 +426,10 @@ async def test_supervisor_refreshes_and_stops_cleanly(monkeypatch):
         raise asyncio.TimeoutError
 
     monkeypatch.setattr(host.asyncio, "wait_for", timeout_then_stop)
-    await host.serve(SETTINGS, group, token, token, stop)
+    await host.serve(SETTINGS, group, token, stop)
     assert refresh.await_count == 3
     assert ready.await_count == 2
     sandbox.delete.assert_awaited_once()
-
-
-async def test_device_code_token_source_keeps_sync_auth_off_event_loop():
-    credential = MagicMock()
-    expected = AccessToken("delegated", int(time.time()) + 3600)
-    credential.get_token.return_value = expected
-    result = await host.DelegatedTokenSource(credential).get_token(WORKIQ_SCOPE)
-    assert result == expected
-    credential.get_token.assert_called_once_with(WORKIQ_SCOPE)
 
 
 async def test_readiness_retries_transient_failures_but_rejects_bad_auth(monkeypatch):
@@ -395,7 +481,16 @@ def test_service_entrypoint_binds_public_interface(monkeypatch, tmp_path):
     server.run.assert_called_once_with(host="0.0.0.0", port=8080)
 
 
-def test_invoker_uses_sandbox_root_and_disables_mutation_retries(monkeypatch, capsys):
+@pytest.fixture
+def cli_credential(monkeypatch):
+    credential = MagicMock(spec=["get_token", "__enter__", "__exit__"])
+    credential.__enter__.return_value = credential
+    credential.get_token.return_value = AccessToken("cli-workiq-token", int(time.time()) + 3600)
+    monkeypatch.setattr(invoke, "AzureCliCredential", MagicMock(return_value=credential))
+    return credential
+
+
+def test_invoker_uses_sandbox_root_and_disables_mutation_retries(monkeypatch, capsys, cli_credential):
     client = MagicMock()
     client.__enter__.return_value = client
     client.responses.create.return_value = SimpleNamespace(
@@ -409,14 +504,62 @@ def test_invoker_uses_sandbox_root_and_disables_mutation_retries(monkeypatch, ca
     invoke.main()
     assert factory.call_args.kwargs["base_url"] == "https://sandbox.example/"
     assert factory.call_args.kwargs["max_retries"] == 0
+    assert factory.call_args.kwargs["api_key"]() == "cli-workiq-token"
+    cli_credential.get_token.assert_called_once_with(WORKIQ_SCOPE)
+    cli_credential.__exit__.assert_called_once()
+    assert factory.call_args.kwargs["default_headers"] == {"X-API-Key": RUNTIME.api_key}
     client.responses.create.assert_called_once_with(
         model="mea-sandbox-agent", input="question", store=False,
     )
     assert capsys.readouterr().out.strip() == "Architecture"
 
 
+@pytest.mark.parametrize("auth_failure", [False, True])
+def test_invoker_sends_cli_bearer_token_and_surfaces_auth_errors(
+    monkeypatch, capsys, cli_credential, auth_failure,
+):
+    monkeypatch.setenv("SERVICE_URL", "https://sandbox.example")
+    monkeypatch.setenv("SERVICE_API_KEY", RUNTIME.api_key)
+    # Neither a manually supplied token nor another Azure credential is needed.
+    monkeypatch.delenv("WORKIQ_BEARER_TOKEN", raising=False)
+    monkeypatch.setattr("sys.argv", ["invoke"])
+    requests = []
+
+    def transport(request):
+        requests.append(request)
+        assert str(request.url) == "https://sandbox.example/responses"
+        assert request.headers["authorization"] == "Bearer cli-workiq-token"
+        assert request.headers["x-api-key"] == RUNTIME.api_key
+        assert json.loads(request.content)["store"] is False
+        return httpx2.Response(200, json={
+            "id": "resp_test", "object": "response", "created_at": 0, "status": "completed",
+            "model": "mea-sandbox-agent", "output": [{
+                "type": "message", "id": "msg_test", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": "Architecture", "annotations": []}],
+            }],
+        })
+
+    http_client = httpx2.Client(transport=httpx2.MockTransport(transport))
+    monkeypatch.setattr(invoke, "OpenAI", lambda **kwargs: OpenAI(http_client=http_client, **kwargs))
+    if auth_failure:
+        cli_credential.get_token.side_effect = CredentialUnavailableError("Azure CLI Work IQ consent required")
+        with pytest.raises(CredentialUnavailableError, match="consent required"):
+            invoke.main()
+        assert requests == []
+        assert not capsys.readouterr().out
+    else:
+        invoke.main()
+        assert len(requests) == 1
+        assert capsys.readouterr().out.strip() == "Architecture"
+    cli_credential.get_token.assert_called_once_with(WORKIQ_SCOPE)
+    cli_credential.__exit__.assert_called_once()
+    assert http_client.is_closed
+
+
 @pytest.mark.parametrize("status,text", [("failed", ""), ("incomplete", ""), ("completed", "")])
-def test_invoker_does_not_claim_success_for_failure_or_empty_output(monkeypatch, status, text, capsys):
+def test_invoker_does_not_claim_success_for_failure_or_empty_output(
+    monkeypatch, status, text, capsys, cli_credential,
+):
     client = MagicMock()
     client.__enter__.return_value = client
     client.responses.create.return_value = SimpleNamespace(

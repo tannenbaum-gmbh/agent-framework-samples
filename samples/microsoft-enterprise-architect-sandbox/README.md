@@ -9,21 +9,23 @@ No new resource group, Container App, registry, Foundry agent version, or Teams
 publication is created. Foundry still supplies the model.
 
 ```text
-OpenAI SDK / HTTP client -- HTTPS + service bearer key --> ACA sandbox :8080
+OpenAI SDK / HTTP client -- HTTPS + X-API-Key + caller bearer --> ACA sandbox :8080
                                                          ResponsesHostServer
                                                          Agent Framework
                                                            | Foundry model
                                                            | Microsoft Learn MCP
                                                            | Work IQ MCP
-Local supervisor -- sandbox SDK + refreshed access tokens --+
+Local supervisor -- sandbox SDK + refreshed model token ----+
 ```
 
-This is a **single-user workshop service**, not a multi-user identity gateway.
-Every holder of the service key acts as the Work IQ user signed into the
-launcher. Unlike the Foundry-hosted sample, both MCP clients execute in the
-sandbox; no Foundry platform/caller headers or project OAuth connections are
-used. Work IQ uses a separate delegated sign-in. A model token or managed
-identity cannot substitute for Microsoft 365 user consent.
+Each caller supplies their **own delegated Work IQ access token** in
+`Authorization: Bearer <token>` on every Responses request. The separate
+`X-API-Key` header controls access to the workshop service; it is not a
+Microsoft 365 identity. The launcher no longer signs into Work IQ or uploads
+a shared user's token. Both MCP clients execute in the sandbox; no Foundry
+platform/caller headers or project OAuth connections are used. A model token
+or managed identity cannot substitute for Microsoft 365 user consent.
+This remains a workshop service, not a production identity gateway.
 
 ## Prerequisites
 
@@ -36,18 +38,19 @@ identity cannot substitute for Microsoft 365 user consent.
   credential. `az login` or another `DefaultAzureCredential` source.
 - A disposable Microsoft 365 tenant with synthetic documents and Work IQ
   enabled, required licensing/billing, source permissions, and tenant policy.
-- A tenant app registration for this sample with **Allow public client flows**
-  enabled and administrator-consented **delegated** Work IQ permissions.
+- Azure CLI installed and `az login` as the intended Microsoft 365 caller,
+  with administrator-consented **delegated** Work IQ permissions available to
+  the Azure CLI application in that tenant.
   Configure `WorkIQ.Read` and `WorkIQAgent.Ask`; add `WorkIQ.Act` only for
-  explicitly authorized mutation exercises. The launcher requests
-  `api://workiq.svc.cloud.microsoft/.default`, using the permissions already
-  consented for this app. Follow the
+  explicitly authorized mutation exercises. The invoker uses
+  `AzureCliCredential` to request `api://workiq.svc.cloud.microsoft/.default`,
+  not an Azure management, Microsoft Graph, or Foundry token. Follow the
   [Work IQ permissions reference](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/permissions)
   and [tenant enablement guide](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/enable-work-iq).
-  Device-code sign-in must be allowed by your tenant's Conditional Access.
 - Sandbox egress for PyPI/package downloads, the Foundry endpoint,
   `learn.microsoft.com`, and `workiq.svc.cloud.microsoft`, including required
-  service redirects. Authentication and token refresh run on the launcher.
+  service redirects. Model token refresh runs on the launcher; each caller
+  obtains their own Work IQ token through their Azure CLI session.
 
 Reuse the hosted sample's fictional guidelines, controlled SharePoint folder,
 and workshop exercises. This sample neither uploads documents nor changes tenant
@@ -63,7 +66,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Fill in non-secret deployment values and your public-client app ID.
+# Fill in non-secret deployment values.
 set -a
 source .env
 set +a
@@ -73,10 +76,10 @@ python -m app.host
 ```
 
 Environment files are not loaded automatically; source only trusted files.
-Do not commit keys or tokens. Sign in with the device-code instructions as the
-intended Microsoft 365 participant. Azure login and Work IQ sign-in are separate.
+Do not commit keys or tokens. The launcher needs Azure model/sandbox access,
+not a Microsoft 365 sign-in. Each caller obtains their own Work IQ token separately.
 
-The supervisor obtains both tokens before allocating compute, uploads a fixed
+The supervisor obtains a model token before allocating compute, uploads a fixed
 runtime-file allowlist, installs dependencies, starts the server on
 `0.0.0.0:8080`, exposes port 8080, and checks its authenticated `/readiness`
 through the actual HTTPS ingress before printing the URL. Readiness verifies
@@ -84,35 +87,61 @@ the HTTP service, **not** model access or MCP consent. Run an actual question
 to verify those separately.
 
 **Keep the supervisor running** in a terminal or under your own process manager.
-It refreshes short-lived access tokens and checks readiness every minute.
+It refreshes the short-lived model token and checks readiness every minute.
 Refresh failures fail the supervisor and trigger cleanup; expired credentials
-are rejected, not silently reused. The sandbox process rereads tokens on model
-and Work IQ requests. Refresh credentials, Azure CLI caches, and client secrets
+are rejected, not silently reused. The sandbox process rereads the token on model
+requests. Caller Work IQ tokens stay in request-scoped memory and are sent only
+to the Work IQ MCP endpoint, never to the model or Microsoft Learn.
+Refresh credentials, Azure CLI caches, and client secrets
 are never uploaded. Token updates are atomic and sensitive files use mode 0600.
 Dependencies are installed each time; use a prepared disk image for repeated use.
 
 ## Invoke
 
 In another terminal, activate the same environment and securely provide the
-**same** `SERVICE_API_KEY` from the supervising terminal. Then:
+**same** `SERVICE_API_KEY` from the supervising terminal. Sign into Azure CLI
+as the intended Work IQ user; the invoker acquires the token automatically.
+No `WORKIQ_BEARER_TOKEN` environment variable is needed. Do not copy tokens
+into command-line arguments, source files, or prompts.
 
 ```bash
 export SERVICE_URL=https://YOUR-SANDBOX-INGRESS-HOST
+az login --tenant YOUR-M365-TENANT-ID
 python -m app.invoke \
   "Use the guidelines at <SharePoint folder link> to design supplier invoice automation. Cite requirement IDs and Microsoft documentation."
-
-curl --fail-with-body "$SERVICE_URL/responses" \
-  -H "Authorization: Bearer $SERVICE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"mea-sandbox-agent","input":"Compare Azure Functions and Logic Apps using Microsoft Learn.","stream":false,"store":false}'
 ```
 
+For other HTTP clients, send `Authorization: Bearer <Work IQ access token>`
+and `X-API-Key: <service key>` to `POST /responses` with
+`{"model":"mea-sandbox-agent","input":"Your question","store":false}`.
+
 Use the ingress root as the OpenAI SDK `base_url`, **without `/v1`**. Routes
-include `POST /responses` and `GET /readiness`. The framework Responses host
+include `POST /responses` and `GET /readiness`. Readiness requires only
+`X-API-Key`; Responses requires both headers. The framework Responses host
 also supports SSE with `"stream": true`. The configured deployment selects the
 model; the request's `model` is not a switch to an arbitrary Foundry deployment.
 The supplied CLI starts fresh requests with `store:false`, reports non-completed
 responses, and does not retry potentially mutating turns automatically.
+The OpenAI SDK's `api_key` argument accepts a bearer-token provider: here it
+uses `get_bearer_token_provider(AzureCliCredential(), WORKIQ_SCOPE)`, not a
+static API key. The provider obtains/caches a token from Azure CLI and refreshes
+it as needed before requests. The service key remains a separate header.
+Caller tokens are not refreshed or persisted by the sandbox service.
+Work IQ validates the token's identity, audience, expiry, consent, and permissions.
+There is no fallback to the launcher's identity on failure.
+
+`az login` alone does not grant Work IQ access. If the Azure CLI application
+cannot obtain the Work IQ scope in your tenant, token acquisition fails
+explicitly. Resolve the tenant's consent/application policy; do not substitute
+a management token or assume consent granted to a different app also covers
+Azure CLI. CLI authentication errors propagate without printing an answer or
+retrying a potentially mutating request.
+
+Only stateless requests with explicit `store:false` are accepted. Background
+execution, conversation/previous-response references, and response retrieval
+or management routes are blocked so one caller cannot reuse another caller's
+host-managed state. Streaming remains supported. Caller token context is
+isolated per request and cleared when processing ends.
 
 For private-data retrieval, confirm actual citations and distinct source
 permissions in the disposable tenant. Authentication failures, unavailable MCP
@@ -123,12 +152,15 @@ client's consent.
 ## Boundaries and cleanup
 
 ACA ingress is configured **anonymous at the platform layer**, then protected
-by the application's constant-time bearer-key check on **every HTTP route**,
+by the application's constant-time `X-API-Key` check on **every HTTP route**,
 including readiness and response retrieval. WebSockets are rejected. The URL
 alone grants no access. There is no unauthenticated health route. TLS terminates
-at ACA ingress. Keep the key private; all its holders share one Microsoft 365
-identity and any host-managed response state. Do not expose this as a shared
-organizational service or forward arbitrary caller tokens/platform headers.
+at ACA ingress. Keep the key private: it allows workshop compute usage, though
+Work IQ operations use each caller's own delegated token. The service key is
+not user authentication, and readiness does not validate Work IQ tokens.
+Do not expose this as a shared organizational service without a production
+authentication gateway, quotas, and auditing. Never forward caller tokens to
+other audiences or propagate caller-supplied platform headers.
 
 The agent, tools, tokens, and in-memory response state live in trusted sandbox
 compute. Do not run untrusted/model-generated code there. Source permissions
@@ -145,7 +177,7 @@ can leave a sandbox behind: use the
 [sandbox portal](https://aka.ms/aca/sandboxes/portal), identify the
 `sample=microsoft-enterprise-architect-sandbox` label, and delete only your
 instance. Do not delete the shared group. A lost supervisor cannot refresh
-tokens; the service fails closed when they expire. Running compute incurs cost.
+model tokens; model calls fail closed when they expire. Running compute incurs cost.
 
 Sandboxes are lifecycle-managed preview compute, **not an always-on production
 hosting guarantee**. The launcher uses a one-hour idle-suspend window and its
@@ -162,7 +194,9 @@ pytest
 ```
 
 Tests exercise the real Responses HTTP protocol with mocked model transport,
-bearer authentication, fresh agent factories, MCP wiring/token refresh, and
+service-key and caller bearer authentication, stateless request enforcement,
+concurrent token isolation, fresh agent factories, MCP caller-token forwarding,
+model token refresh, and
 sandbox startup, readiness, failure, and cleanup paths. They need no Azure
 credentials. Live provisioning, model/MCP access, user consent, and tenant policy
 require the Azure/Microsoft 365 checks above and are not proven by offline tests.

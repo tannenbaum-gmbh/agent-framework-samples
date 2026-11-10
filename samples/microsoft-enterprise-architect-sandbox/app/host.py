@@ -14,11 +14,10 @@ import httpx
 from azure.containerapps.sandbox import endpoint_for_region
 from azure.containerapps.sandbox.aio import SandboxClient, SandboxGroupClient
 from azure.core.credentials import AccessToken
-from azure.identity import DeviceCodeCredential
 from azure.identity.aio import DefaultAzureCredential
 
 from .config import Settings, get_settings
-from .tokens import FOUNDRY_SCOPE, WORKIQ_SCOPE
+from .tokens import FOUNDRY_SCOPE
 
 WORKSPACE = "/workspace/mea-service"
 TOKEN_PATH = f"{WORKSPACE}/tokens.json"
@@ -32,22 +31,12 @@ class TokenSource(Protocol):
     async def get_token(self, *scopes: str) -> AccessToken: ...
 
 
-class DelegatedTokenSource:
-    def __init__(self, credential: DeviceCodeCredential) -> None:
-        self.credential = credential
-
-    async def get_token(self, *scopes: str) -> AccessToken:
-        return await asyncio.to_thread(self.credential.get_token, *scopes)
-
-
 async def upload_tokens(
-    sandbox: SandboxClient, foundry: TokenSource, workiq: TokenSource,
+    sandbox: SandboxClient, foundry: TokenSource,
 ) -> None:
     model_token = await foundry.get_token(FOUNDRY_SCOPE)
-    user_token = await workiq.get_token(WORKIQ_SCOPE)
     content = json.dumps({
         "foundry": {"token": model_token.token, "expires_on": model_token.expires_on},
-        "workiq": {"token": user_token.token, "expires_on": user_token.expires_on},
     })
     await sandbox.write_file(f"{TOKEN_PATH}.new", content, mode="0600")
     result = await sandbox.exec(f"mv -f {TOKEN_PATH}.new {TOKEN_PATH}")
@@ -63,7 +52,7 @@ async def check_command(sandbox: SandboxClient, command: str, operation: str) ->
 
 async def probe_readiness(url: str, api_key: str) -> None:
     async with httpx.AsyncClient(
-        headers={"Authorization": f"Bearer {api_key}"}, timeout=10,
+        headers={"X-API-Key": api_key}, timeout=10,
     ) as client:
         for _ in range(60):
             try:
@@ -90,7 +79,6 @@ async def serve(
     settings: Settings,
     group: SandboxGroupClient,
     foundry: TokenSource,
-    workiq: TokenSource,
     stop: asyncio.Event,
 ) -> None:
     sandbox = None
@@ -109,13 +97,13 @@ async def serve(
         await sandbox.write_file(
             f"{WORKSPACE}/config.json", json.dumps(asdict(settings.runtime)), mode="0600",
         )
-        await upload_tokens(sandbox, foundry, workiq)
+        await upload_tokens(sandbox, foundry)
         await check_command(
             sandbox,
             "python3 -m pip install --disable-pip-version-check -r requirements-sandbox.txt",
             "Dependency installation",
         )
-        await upload_tokens(sandbox, foundry, workiq)
+        await upload_tokens(sandbox, foundry)
         await check_command(
             sandbox,
             "nohup env OTEL_SDK_DISABLED=true OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false "
@@ -134,7 +122,7 @@ async def serve(
             try:
                 await asyncio.wait_for(stop.wait(), timeout=60)
             except asyncio.TimeoutError:
-                await upload_tokens(sandbox, foundry, workiq)
+                await upload_tokens(sandbox, foundry)
                 await wait_ready(url, settings.runtime.api_key)
     finally:
         if sandbox is not None:
@@ -152,12 +140,8 @@ async def main() -> None:
         loop.add_signal_handler(signum, stop.set)
     async with AsyncExitStack() as stack:
         foundry = await stack.enter_async_context(DefaultAzureCredential())
-        workiq = DelegatedTokenSource(stack.enter_context(DeviceCodeCredential(
-            tenant_id=settings.tenant_id, client_id=settings.workiq_client_id,
-        )))
-        # Obtain consent before allocating billable compute.
+        # Verify model access before allocating billable compute.
         await foundry.get_token(FOUNDRY_SCOPE)
-        await workiq.get_token(WORKIQ_SCOPE)
         group = await stack.enter_async_context(SandboxGroupClient(
             endpoint_for_region(settings.sandbox_region),
             foundry,
@@ -165,7 +149,7 @@ async def main() -> None:
             resource_group=settings.resource_group,
             sandbox_group=settings.sandbox_group,
         ))
-        await serve(settings, group, foundry, workiq, stop)
+        await serve(settings, group, foundry, stop)
 
 
 if __name__ == "__main__":

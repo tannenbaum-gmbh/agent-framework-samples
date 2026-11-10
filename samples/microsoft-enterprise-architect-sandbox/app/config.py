@@ -35,8 +35,6 @@ class Settings:
     resource_group: str
     sandbox_group: str
     sandbox_region: str
-    tenant_id: str
-    workiq_client_id: str
     sandbox_disk_image: str = "python-3.14"
 
 
@@ -55,7 +53,5 @@ def get_settings() -> Settings:
         resource_group=require("AZURE_RESOURCE_GROUP"),
         sandbox_group=require("AZURE_SANDBOX_GROUP"),
         sandbox_region=require("AZURE_SANDBOX_REGION"),
-        tenant_id=require("AZURE_TENANT_ID"),
-        workiq_client_id=require("WORKIQ_CLIENT_ID"),
         sandbox_disk_image=os.environ.get("SANDBOX_DISK_IMAGE", "").strip() or "python-3.14",
     )

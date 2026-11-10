@@ -8,7 +8,7 @@ from agent_framework import Agent, MCPStreamableHTTPTool
 from agent_framework.foundry import FoundryChatClient
 
 from .config import RuntimeSettings
-from .tokens import FileTokenCredential, read_token
+from .tokens import FileTokenCredential
 
 MSLEARN_MCP_URL = "https://learn.microsoft.com/api/mcp"
 WORKIQ_MCP_URL = "https://workiq.svc.cloud.microsoft/mcp"
@@ -44,7 +44,9 @@ unsupported operations explicitly.
 """.strip()
 
 
-def create_agent(settings: RuntimeSettings, token_path: Path) -> Agent:
+def create_agent(settings: RuntimeSettings, token_path: Path, workiq_token: str) -> Agent:
+    if not workiq_token.strip():
+        raise ValueError("A caller Work IQ bearer token is required.")
     return Agent(
         client=FoundryChatClient(
             project_endpoint=settings.project_endpoint,
@@ -68,7 +70,7 @@ def create_agent(settings: RuntimeSettings, token_path: Path) -> Agent:
                 load_prompts=False,
                 approval_mode="never_require",
                 header_provider=lambda _: {
-                    "Authorization": f"Bearer {read_token(token_path, 'workiq').token}",
+                    "Authorization": f"Bearer {workiq_token}",
                 },
             ),
         ],
