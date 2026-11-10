@@ -32,10 +32,19 @@ synthetic data.
 
 ## Prerequisites
 
-- Follow [`agent365-identity-agent` prerequisites](../agent365-identity-agent/README.md#prerequisites),
-  including Foundry User access for the agent identity and an Azure Container
-  Apps sandbox group.
-- Python 3.11+ locally, Azure CLI sign-in, a Foundry project, and a
+- A tenant with Agent 365 enabled, and an Agent ID Developer with a Global
+  Administrator available to complete permission grants (or a Global
+  Administrator performing setup).
+- A supported coding assistant: VS Code agent mode, GitHub Copilot CLI, or
+  Claude Code, plus the GitHub CLI (`gh`) to install the skills.
+- Deploy the [shared infrastructure](../../infra/README.md#deploying-the-sandbox-group)
+  with `deploySandboxGroup=true`. Your signed-in identity needs **Container Apps
+  SandboxGroup Data Owner** on the sandbox group and permission to assign
+  **Foundry User** on the Foundry account.
+- A system-assigned or user-assigned managed identity attached to the sandbox
+  group. The sandbox runtime must support managed identity token acquisition
+  for `api://AzureADTokenExchange`; attaching an identity alone does not verify it.
+- Python 3.11+ locally, Azure CLI sign-in (`az login`), a Foundry project, and a
   tool-capable model deployment (default: `gpt-5.3-codex-2`).
 - A Work IQ MCP connection in the Foundry project targeting
   `https://workiq.svc.cloud.microsoft/mcp`, with delegated OAuth configured
@@ -46,14 +55,22 @@ synthetic data.
   guidelines described in
   [Upload the internal guidelines](../microsoft-enterprise-architect-prompt/README.md#upload-the-internal-guidelines).
 
-## Configure identity and Foundry
+## Set up with Agent 365 skills
 
-Use the identity provisioning, managed-identity federation, Foundry role
-assignment, and optional Agent 365 registration steps in the
-[`agent365-identity-agent` README](../agent365-identity-agent/README.md). Run
-its `app.manage_identity` commands from this sample directory so they use the
-configuration below. The provisioning commands and identity management code
-are included here as well.
+Follow [Agent 365 Skills for Guided Agent Setup](https://learn.microsoft.com/en-us/microsoft-agent-365/developer/agent-365-skills)
+and its [installation quickstart](https://learn.microsoft.com/en-us/microsoft-agent-365/developer/get-started).
+Use the **standard agent / S2S** path, not AI teammate: this sample has no
+agent-owned mailbox, Teams presence, or signed-in user for its Foundry calls.
+
+### 1. Prepare the local project
+
+Install the skills, then restart your coding assistant so it discovers them:
+
+```bash
+gh skill add microsoft/agent365-skills
+```
+
+Prepare this sample's Python environment:
 
 ```bash
 cd samples/agent365-enterprise-architect
@@ -61,18 +78,102 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Set the identity IDs, Foundry endpoint, Azure sandbox settings, and Work IQ connection name.
+# Fill in the tenant, Foundry endpoint, Azure sandbox settings, and Work IQ connection name.
+```
+
+### 2. Register through the guided setup
+
+Open this sample directory in your coding assistant, or explicitly target it:
+
+> Use the a365-setup skill to set up samples/agent365-enterprise-architect
+> for Agent 365 as a standard Python agent using S2S authentication.
+> Preserve its existing Foundry prompt-agent and Container Apps sandbox runtime.
+> Reuse any existing blueprint and agent identity; do not create replacements.
+
+The `a365-setup` skill checks the CLI and Azure prerequisites, then delegates
+registration to `make-a365-agent`. Confirm these choices:
+
+- **Agent type:** Standard agent (Agent / Non AI Teammate).
+- **Authentication:** S2S; the sandbox calls Foundry as the agent identity.
+- **Registration:** Create a blueprint and agent identity only if none exist.
+  If already provisioned, supply their IDs and request registration-only setup.
+- **Hosting:** Keep the existing sandbox launcher; do not add an AI teammate
+  hosting layer or messaging endpoints.
+- **Work IQ add-on:** Skip `add-workiq-tools` for this S2S identity. Keep the
+  existing delegated Foundry connection described below.
+- **Observability:** Optional; see [Activity export](#5-optional-activity-export).
+
+Review the proposed changes before applying them. Complete any administrator
+consent handoff and verify successful **Agent Registration**, not just identity
+creation, in the setup summary and the Microsoft 365 admin center's **Agents**
+view. Preserve the generated local CLI configuration for retries and keep any
+credentials out of Git.
+
+### 3. Map the identity and configure sandbox access
+
+Setup records IDs in its local `a365.generated.config.json`; the sample runtime
+does not read that file. Copy the confirmed identity values into your local
+`.env` using these meanings:
+
+| Sample variable | Value |
+| --- | --- |
+| `AZURE_TENANT_ID` | Tenant that owns the blueprint and agent identity. |
+| `AGENT_BLUEPRINT_APP_ID` | Blueprint application/client ID, not its object ID. |
+| `AGENT_IDENTITY_ID` | Agent identity service-principal object ID, used for RBAC. |
+| `AGENT_IDENTITY_CLIENT_ID` | Agent identity application/client ID, used for token requests. |
+| `AGENT_BLUEPRINT_MANAGED_IDENTITY_CLIENT_ID` | Empty for a system-assigned identity; the attached managed identity's client ID for a user-assigned identity. |
+
+Load the completed settings from this sample directory:
+
+```bash
+# Only source a trusted local file. Quote values containing spaces or shell operators.
 set -a
 source .env
 set +a
 ```
 
-The `.env` variables for identity and sandbox configuration have the same
-meaning as in `agent365-identity-agent`. `WORKIQ_CONNECTION_NAME` is the name
-of the existing Foundry project connection; secrets stay in that Foundry
-connection, not in this sample.
+Agent 365 registration does not configure sandbox federation or Foundry RBAC.
+Trust the sandbox group's managed identity on the registered blueprint using
+the included management command (skip if this trust already exists):
 
-Create a versioned agent definition:
+```bash
+python -m app.manage_identity blueprint add-managed-identity \
+  --principal-id <sandbox-managed-identity-object-id>
+```
+
+This command uses delegated administrator sign-in. The federated credential
+uses the managed identity's **object/principal ID**, whereas the runtime
+variable above uses its **client ID**. The sandbox never receives a blueprint
+client secret. See the [identity sample's credential guidance](../agent365-identity-agent/README.md#2-give-the-blueprint-a-credential)
+for local management credentials and federation troubleshooting.
+
+Grant the agent identity access to the specific Foundry account containing
+your project (skip if the assignment already exists):
+
+```bash
+FOUNDRY_ID=$(az cognitiveservices account show \
+  --resource-group "$AZURE_RESOURCE_GROUP" \
+  --name <foundry-account-name> --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$AGENT_IDENTITY_ID" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Foundry User" \
+  --scope "$FOUNDRY_ID"
+```
+
+Allow time for role propagation. Your local signed-in identity also needs
+Foundry project access to create and delete prompt-agent versions.
+
+### 4. Connect Work IQ and create the Foundry agent
+
+Set `WORKIQ_CONNECTION_NAME` to the existing Foundry project connection
+configured in the prerequisites. Secrets stay in that connection, not in this
+sample. The skills skip Work IQ tooling for S2S, but this sample deliberately
+uses a separate **delegated OAuth** connection for remote Work IQ calls. Do not
+change the agent identity to OBO or assume S2S registration grants access to
+Microsoft 365 data.
+
+Reload your trusted `.env` after any edits, then create a versioned agent definition:
 
 ```bash
 python -m app.create
@@ -81,6 +182,26 @@ python -m app.create
 Creation verifies that the named project connection targets the Work IQ MCP
 endpoint, then creates a prompt-agent version with the Microsoft Learn and
 Work IQ tools. It prints the immutable version identifier.
+
+### 5. Optional Activity export
+
+This sample already includes opt-in instrumentation. Ask your coding assistant:
+
+> Use a365-code-validator to validate this sample's existing Agent 365
+> observability integration in read-only mode. It is a standard S2S agent
+> executing in a Container Apps sandbox. Preserve managed-identity federation.
+
+Use `instrument-observability` only if you need to add missing instrumentation,
+and review its changes rather than installing a second exporter. Registration
+alone does not emit Activity telemetry. Observability requires at least one
+user in the tenant with a Microsoft 365 E7 or Microsoft Agent 365 license assigned.
+
+To enable the existing exporter, set `ENABLE_A365_OBSERVABILITY_EXPORTER=true`
+and populate `A365_SPONSOR_ID`, `A365_SPONSOR_NAME`, and `A365_SPONSOR_EMAIL`
+with the actual blueprint sponsor's details in your local `.env`, then reload it.
+Keep `A365_CAPTURE_CONTENT=false` unless content capture is approved. After
+a run, verify Activity in the Microsoft 365 admin center; a successful export
+response alone does not prove Activity ingestion.
 
 ## Run
 
