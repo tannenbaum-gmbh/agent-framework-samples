@@ -1,0 +1,4 @@
+azure-containerapps-sandbox==0.1.0b4
+azure-identity>=1.19,<2
+httpx>=0.28,<1
+openai>=2,<3
