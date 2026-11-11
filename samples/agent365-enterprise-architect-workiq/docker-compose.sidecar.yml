@@ -1,0 +1,22 @@
+# Local "hosting platform" stand-in: the Microsoft Entra SDK for AgentID sidecar.
+# The agent process runs on the host and reaches the sidecar on loopback only.
+services:
+  sidecar:
+    image: mcr.microsoft.com/entra-sdk/auth-sidecar:1.0.0-azurelinux3.0-distroless
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      ASPNETCORE_URLS: http://+:5000
+      AzureAd__Instance: https://login.microsoftonline.com/
+      AzureAd__TenantId: ${AZURE_TENANT_ID:?}
+      # The blueprint is the sidecar's identity; it also is the audience of inbound user tokens.
+      AzureAd__ClientId: ${AGENT_BLUEPRINT_APP_ID:?}
+      AzureAd__ClientCredentials__0__SourceType: ClientSecret
+      AzureAd__ClientCredentials__0__ClientSecret: ${AGENT_BLUEPRINT_CLIENT_SECRET:?}
+      # Delegated (OBO) entry; the agent overrides scopes per call.
+      DownstreamApis__Agent__BaseUrl: https://ai.azure.com/
+      DownstreamApis__Agent__Scopes__0: https://ai.azure.com/.default
+      # App-only entry for Agent 365 telemetry (no user context).
+      DownstreamApis__AgentApp__BaseUrl: https://ai.azure.com/
+      DownstreamApis__AgentApp__Scopes__0: https://ai.azure.com/.default
+      DownstreamApis__AgentApp__RequestAppToken: "true"

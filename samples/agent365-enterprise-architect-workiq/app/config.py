@@ -97,3 +97,42 @@ def get_settings() -> Settings:
         observability_sponsor_name=_require("A365_SPONSOR_NAME") if observability_enabled else None,
         observability_sponsor_email=_require("A365_SPONSOR_EMAIL") if observability_enabled else None,
     )
+
+
+@dataclass(frozen=True)
+class LocalSettings:
+    """Settings for running the agent locally against the Entra SDK sidecar."""
+
+    tenant_id: str
+    blueprint_app_id: str
+    agent_identity_client_id: str
+    foundry_project_endpoint: str
+    foundry_model_deployment: str
+    user_assertion_file: str
+    sidecar_url: str = "http://localhost:5000"
+    workiq_enable_actions: bool = False
+    observability_enabled: bool = False
+    observability_capture_content: bool = False
+    observability_sponsor_id: str | None = None
+    observability_sponsor_name: str | None = None
+    observability_sponsor_email: str | None = None
+
+
+def get_local_settings() -> LocalSettings:
+    """Build settings for the sidecar-hosted local run; no sandbox variables are needed."""
+    observability_enabled = _boolean("ENABLE_A365_OBSERVABILITY_EXPORTER")
+    return LocalSettings(
+        tenant_id=_require("AZURE_TENANT_ID"),
+        blueprint_app_id=_require("AGENT_BLUEPRINT_APP_ID"),
+        agent_identity_client_id=_require("AGENT_IDENTITY_CLIENT_ID"),
+        foundry_project_endpoint=_require("FOUNDRY_PROJECT_ENDPOINT"),
+        foundry_model_deployment=os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5"),
+        user_assertion_file=_require("AGENT_USER_ASSERTION_FILE"),
+        sidecar_url=os.environ.get("SIDECAR_URL", "http://localhost:5000"),
+        workiq_enable_actions=_boolean("WORKIQ_ENABLE_ACTIONS"),
+        observability_enabled=observability_enabled,
+        observability_capture_content=_boolean("A365_CAPTURE_CONTENT"),
+        observability_sponsor_id=_require("A365_SPONSOR_ID") if observability_enabled else None,
+        observability_sponsor_name=_require("A365_SPONSOR_NAME") if observability_enabled else None,
+        observability_sponsor_email=_require("A365_SPONSOR_EMAIL") if observability_enabled else None,
+    )

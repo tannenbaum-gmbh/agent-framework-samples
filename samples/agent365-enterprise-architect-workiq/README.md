@@ -91,6 +91,41 @@ or persistent-workspace integrations.
   Copilot licensing; verify current availability and billing requirements for your tenant.
 - Agent ID Developer (or an applicable higher role) for blueprint creation.
 
+## Run locally with the Microsoft Entra SDK sidecar
+
+As an alternative to the sandbox, `python -m app.run_local` runs the same agent as a
+plain local process that simulates any hosting platform. It holds **no** blueprint
+credential: every token (delegated Foundry and Work IQ via OBO, app-only telemetry)
+is negotiated by the [Microsoft Entra SDK for AgentID sidecar](https://learn.microsoft.com/entra/agent-id/authentication-with-auth-sdk-sidecar),
+which owns the blueprint credential and the blueprint -> agent identity exchange.
+Foundry remains the LLM backend.
+
+```text
+agent process --Bearer user token + AgentIdentity--> sidecar /AuthorizationHeader/Agent
+              <-- delegated Foundry / Work IQ token (OBO) --
+agent process --AgentIdentity--> sidecar /AuthorizationHeaderUnauthenticated/AgentApp
+              <-- app-only Agent 365 telemetry token --
+```
+
+Prerequisites are the same registration and delegated authorization as below, except
+no sandbox and no managed-identity federation. A managed identity is unavailable
+locally, so the sidecar uses a blueprint client secret
+(`AGENT_BLUEPRINT_CLIENT_SECRET`); in Azure use `SignedAssertionFromManagedIdentity`.
+
+```bash
+set -a; source .env; set +a
+python -m app.sign_in                                  # writes the user assertion
+docker compose -f docker-compose.sidecar.yml up -d     # sidecar on 127.0.0.1:5000
+curl http://localhost:5000/healthz
+python -m app.run_local "Summarize architecture guidance in my documents"
+docker compose -f docker-compose.sidecar.yml down
+```
+
+The sidecar API must stay on loopback or a private network. Two downstream entries are
+configured: `Agent` (delegated; scopes overridden per call) and `AgentApp` with
+`RequestAppToken=true` (telemetry); without that flag the sidecar attempts a user flow.
+The inbound user token must be audience-bound to the blueprint, as in the sandbox flow.
+
 ## 1. Prepare a fresh registration
 
 ```bash
