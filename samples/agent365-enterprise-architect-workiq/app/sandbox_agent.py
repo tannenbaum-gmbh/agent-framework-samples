@@ -184,6 +184,13 @@ async def run(request_path: Path) -> dict[str, Any]:
         request["tenant_id"], request["blueprint_app_id"], request["agent_identity_client_id"],
         request.get("managed_identity_client_id"),
     )
+    return await run_request(request, credential, export_credential)
+
+
+async def run_request(
+    request: dict[str, Any], credential: AsyncTokenCredential, export_credential: AsyncTokenCredential,
+) -> dict[str, Any]:
+    """Run the agent with the given delegated and app-only (telemetry) credentials."""
     telemetry: SandboxObservability | None = None
     resources = AsyncExitStack()
     try:
