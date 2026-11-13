@@ -1,0 +1,6 @@
+agent-framework-core>=1.26,<2
+agent-framework-foundry>=1.13,<2
+agent-framework-foundry-hosting==1.0.0b261106
+agent-framework-purview==1.0.0b261112
+azure-ai-projects>=2.6.1,<3
+azure-identity>=1.19,<2
