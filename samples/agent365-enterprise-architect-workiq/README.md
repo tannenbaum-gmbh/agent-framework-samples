@@ -113,6 +113,8 @@ locally, so the sidecar uses a blueprint client secret
 (`AGENT_BLUEPRINT_CLIENT_SECRET`); in Azure use `SignedAssertionFromManagedIdentity`.
 
 ```bash
+cd samples/agent365-enterprise-architect-workiq
+python -m pip install -r requirements.txt -r requirements-sandbox.txt
 set -a; source .env; set +a
 python -m app.sign_in                                  # writes the user assertion
 docker compose -f docker-compose.sidecar.yml up -d     # sidecar on 127.0.0.1:5000
@@ -120,6 +122,10 @@ curl http://localhost:5000/healthz
 python -m app.run_local "Summarize architecture guidance in my documents"
 docker compose -f docker-compose.sidecar.yml down
 ```
+
+Install both requirements files into the same Python environment used to run the
+agent. The sandbox requirements are also needed locally because the local runner
+imports and executes the sandbox agent.
 
 The sidecar API must stay on loopback or a private network. Two downstream entries are
 configured: `Agent` (delegated; scopes overridden per call) and `AgentApp` with
