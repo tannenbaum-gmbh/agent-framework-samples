@@ -6,7 +6,7 @@ environment used by the samples in this repository. It provisions:
 - A resource group
 - A Cognitive Services account (`kind: AIServices`), deployed with the
   [Azure Verified Module `avm/res/cognitive-services/account`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/cognitive-services/account)
-- **GPT-5** and **GPT-5.3 Codex** model deployments on that account
+- **GPT-5**, **GPT-5.3 Codex**, and **GPT-6.1 Sol** model deployments on that account
 - An **AI Foundry project** on the account, ready to be used with
   [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/?pivots=programming-language-python)
 - Optionally, an **Azure Container Apps sandbox group** (preview) used by the
@@ -19,14 +19,14 @@ environment used by the samples in this repository. It provisions:
 | --- | --- |
 | `main.bicep` | Subscription-scoped entry point. Creates the resource group and calls `modules/ai-foundry.bicep`. |
 | `main.bicepparam` | Default parameter values. Copy/adjust as needed (e.g. `main.local.bicepparam`, which is git-ignored). |
-| `modules/ai-foundry.bicep` | Resource-group-scoped module deploying the Cognitive Services account (via AVM), the GPT-5 deployment, and the AI Foundry project. |
+| `modules/ai-foundry.bicep` | Resource-group-scoped module deploying the Cognitive Services account (via AVM), the model deployments, and the AI Foundry project. |
 | `modules/sandbox-group.bicep` | Resource-group-scoped module deploying the Container Apps sandbox group and the `Container Apps SandboxGroup Data Owner` role assignment. |
 
 ## Prerequisites
 
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) with the Bicep tooling
   (already installed in this repo's [devcontainer](../.devcontainer/devcontainer.json))
-- An Azure subscription with access/quota for the GPT-5 and GPT-5.3 Codex
+- An Azure subscription with access/quota for the GPT-5, GPT-5.3 Codex, and GPT-6.1 Sol
   models in the chosen region
 - `az login`
 
@@ -78,6 +78,7 @@ The deployment exposes the values needed by the samples:
 | `foundryProjectEndpoint` | `FOUNDRY_PROJECT_ENDPOINT` environment variable (`FoundryChatClient(project_endpoint=...)`) |
 | `gpt5DeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` environment variable (`FoundryChatClient(model=...)`) |
 | `gpt53CodexDeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` for samples that use GPT-5.3 Codex |
+| `gpt61SolDeploymentName` | `FOUNDRY_MODEL_DEPLOYMENT` for samples that use GPT-6.1 Sol |
 | `sandboxGroupName` | `AZURE_SANDBOX_GROUP` environment variable (empty unless `deploySandboxGroup=true`) |
 | `sandboxGroupLocation` | `AZURE_SANDBOX_REGION` environment variable (empty unless `deploySandboxGroup=true`) |
 
@@ -97,6 +98,11 @@ az deployment sub show \
 - The GPT-5.3 Codex deployment defaults to deployment name `gpt-5.3-codex-2`,
   model `gpt-5.3-codex`, version `2026-02-24`, and the `GlobalStandard` SKU.
   Its name, version, SKU, and capacity are independently parameterized.
+- The GPT-6.1 Sol deployment defaults to deployment/model name `gpt-6.1-sol`,
+  version `2026-09-29`, and the `GlobalStandard` SKU with capacity `10`.
+  Its name, version, SKU, and capacity are independently parameterized via
+  `gpt61SolDeploymentName`, `gpt61SolModelVersion`, `gpt61SolSkuName`, and
+  `gpt61SolSkuCapacity`.
 - `disableLocalAuth` is set to `false` so both Microsoft Entra ID and API-key based
   authentication work; for production scenarios prefer Entra ID only (`disableLocalAuth: true`)
   and grant the `Cognitive Services User`/`Cognitive Services OpenAI User` role to your

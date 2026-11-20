@@ -156,6 +156,21 @@ python -m app.invoke \
   "In <site-url>, library <library-id>, folder <folder-id>, check that architecture-review-unique.md does not exist. Create that NEW Markdown file with this synthetic content: Invoice automation review; owner Workshop Team. Read it back. Never overwrite."
 ```
 
+### Verify Agent 365 tool telemetry
+
+The sample uses the Foundry host's existing OpenTelemetry configuration. It
+adds an `execute_tool` span when the model response reports a completed or
+failed managed MCP call. The span includes the tool name, type, and call ID,
+not the tool arguments, results, or error text. Its duration is not the remote
+tool's execution time. Work IQ execution and delegated OAuth stay with Foundry.
+
+With [Agent 365 observability configured](https://learn.microsoft.com/azure/foundry/agents/how-to/grant-agent-365-permissions),
+deploy the updated version and ask the published agent to verify a public Azure
+fact using Microsoft Learn MCP. First check the Foundry trace for `execute_tool`,
+then check the agent's Activity and Single Agent Map in the Microsoft 365 admin
+center. If the span exists but Activity is missing, check the hosted runtime's
+Agent 365 exporter logs before changing tool instrumentation.
+
 Calls do not require an interactive terminal or tool-use approval. Unexpected
 MCP approval requests fail with a redeployment instruction rather than being
 silently approved. Failed/incomplete responses, MCP errors, and OAuth consent

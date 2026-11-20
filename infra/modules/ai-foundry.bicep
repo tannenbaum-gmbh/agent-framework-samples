@@ -1,5 +1,5 @@
 // Provisions a Microsoft Foundry (Cognitive Services `AIServices`) account using the
-// Azure Verified Module for Cognitive Services accounts, GPT-5 and GPT-5.3 Codex model
+// Azure Verified Module for Cognitive Services accounts, GPT-5, GPT-5.3 Codex, and GPT-6.1 Sol model
 // deployments, and an AI Foundry project ready to be used with Agent Framework.
 targetScope = 'resourceGroup'
 
@@ -35,6 +35,18 @@ param gpt53CodexSkuName string
 
 @description('Required. Tokens-per-minute capacity (in units of 1,000) for the GPT-5.3 Codex deployment.')
 param gpt53CodexSkuCapacity int
+
+@description('Required. Name of the GPT-6.1 Sol model deployment.')
+param gpt61SolDeploymentName string
+
+@description('Required. Model version for the GPT-6.1 Sol deployment.')
+param gpt61SolModelVersion string
+
+@description('Required. Deployment SKU name for the GPT-6.1 Sol model.')
+param gpt61SolSkuName string
+
+@description('Required. Tokens-per-minute capacity (in units of 1,000) for the GPT-6.1 Sol deployment.')
+param gpt61SolSkuCapacity int
 
 @description('Optional. Tags applied to the resources.')
 param tags object = {}
@@ -79,6 +91,18 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.0' = {
         sku: {
           name: gpt53CodexSkuName
           capacity: gpt53CodexSkuCapacity
+        }
+      }
+      {
+        name: gpt61SolDeploymentName
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-6.1-sol'
+          version: gpt61SolModelVersion
+        }
+        sku: {
+          name: gpt61SolSkuName
+          capacity: gpt61SolSkuCapacity
         }
       }
     ]
@@ -127,3 +151,6 @@ output gpt5DeploymentName string = gpt5DeploymentName
 
 @description('The name of the GPT-5.3 Codex model deployment.')
 output gpt53CodexDeploymentName string = gpt53CodexDeploymentName
+
+@description('The name of the GPT-6.1 Sol model deployment.')
+output gpt61SolDeploymentName string = gpt61SolDeploymentName

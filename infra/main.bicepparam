@@ -10,3 +10,7 @@ param gpt53CodexDeploymentName = 'gpt-5.3-codex-2'
 param gpt53CodexModelVersion = '2026-02-24'
 param gpt53CodexSkuName = 'GlobalStandard'
 param gpt53CodexSkuCapacity = 10
+param gpt61SolDeploymentName = 'gpt-6.1-sol'
+param gpt61SolModelVersion = '2026-09-29'
+param gpt61SolSkuName = 'GlobalStandard'
+param gpt61SolSkuCapacity = 10

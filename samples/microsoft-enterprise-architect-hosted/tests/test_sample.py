@@ -12,9 +12,15 @@ from zipfile import ZipFile
 import httpx
 import httpx2
 import pytest
+from agent_framework import ChatContext, ChatResponse
 from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.ai.projects.models import AgentEndpointConfig
 from openai import AsyncOpenAI
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from app import agent, delete, deploy, host, invoke
 from app.config import Settings, get_settings
@@ -109,6 +115,7 @@ def test_agent_wires_full_workiq_and_learn_catalogs_without_toolbox(monkeypatch)
     client_factory.assert_called_once_with(
         project_endpoint=SETTINGS.project_endpoint, model="workshop-model", credential=credential,
         default_headers={"x-agent-foundry-call-id": "opaque-call"},
+        middleware=[agent.trace_managed_mcp],
     )
     options = factory.call_args.kwargs
     assert options["name"] == "mea-hosted-agent"
@@ -325,6 +332,13 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
     requests = []
     model_clients = []
     real_client = agent.FoundryChatClient
+    exporter = InMemorySpanExporter()
+    with monkeypatch.context() as telemetry_env:
+        telemetry_env.delenv("OTEL_SDK_DISABLED")
+        provider = TracerProvider(shutdown_on_exit=False)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer(__name__)
+    monkeypatch.setattr(agent, "_TRACER", tracer)
 
     def transport(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
@@ -337,13 +351,24 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
             "id": "msg_test", "type": "message", "role": "assistant", "status": "completed",
             "content": [{"type": "output_text", "text": "Architecture", "annotations": []}],
         }
+        tool_call = {
+            "type": "mcp_call", "id": "mcp_test", "name": "learn_search", "server_label": "MicrosoftLearn",
+            "arguments": '{"query":"private-argument"}', "output": "private-result", "status": "completed",
+        }
+        failed_call = {
+            "type": "mcp_call", "id": "mcp_failed", "name": "workiq_search", "server_label": "WorkIQ",
+            "arguments": "{}", "status": "failed",
+        }
         events = [
             {"type": "response.output_text.delta", "sequence_number": 0,
-             "item_id": "msg_test", "output_index": 0, "content_index": 0, "delta": "Architecture"},
-            {"type": "response.output_item.done", "sequence_number": 1, "output_index": 0, "item": message},
-            {"type": "response.completed", "sequence_number": 2, "response": {
+             "item_id": "msg_test", "output_index": 2, "content_index": 0, "delta": "Architecture"},
+            {"type": "response.output_item.done", "sequence_number": 1, "output_index": 0, "item": tool_call},
+            {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": tool_call},
+            {"type": "response.output_item.done", "sequence_number": 3, "output_index": 1, "item": failed_call},
+            {"type": "response.output_item.done", "sequence_number": 4, "output_index": 2, "item": message},
+            {"type": "response.completed", "sequence_number": 5, "response": {
                 "id": "resp_model", "object": "response", "created_at": 0, "status": "completed",
-                "model": SETTINGS.model_deployment, "output": [message],
+                "model": SETTINGS.model_deployment, "output": [tool_call, failed_call, message],
             }},
         ]
         return httpx2.Response(
@@ -371,16 +396,67 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
             ready = await client.get("/readiness")
             assert ready.status_code == 200
             for number in (1, 2):
-                result = await client.post(
-                    "/responses", json={"input": "Design an architecture", "stream": False, "store": False},
-                    headers={"x-agent-foundry-call-id": f"call-{number}"},
-                )
+                with tracer.start_as_current_span("request"):
+                    headers = {"x-agent-foundry-call-id": f"call-{number}"}
+                    TraceContextTextMapPropagator().inject(headers)
+                    result = await client.post(
+                        "/responses", json={"input": "Design an architecture", "stream": False, "store": False},
+                        headers=headers,
+                    )
                 assert result.status_code == 200, result.text
                 assert result.json()["status"] == "completed", result.text
                 assert "Architecture" in result.text
                 assert not any(item["type"] == "mcp_approval_request" for item in result.json()["output"])
 
-    asyncio.run(scenario())
+    try:
+        asyncio.run(scenario())
+        spans = exporter.get_finished_spans()
+    finally:
+        provider.shutdown()
     assert len(requests) == 2
     assert all(client.is_closed for client in model_clients)
     credential.get_token.assert_not_called()
+    request_spans = [span for span in spans if span.name == "request"]
+    assert len(request_spans) == 2
+    for request_span in request_spans:
+        tools = [
+            span for span in spans
+            if span.name.startswith("execute_tool ") and span.context.trace_id == request_span.context.trace_id
+        ]
+        assert [span.name for span in tools] == ["execute_tool learn_search", "execute_tool workiq_search"], [
+            span.name for span in spans
+        ]
+        assert dict(tools[0].attributes) == {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": "learn_search",
+            "gen_ai.tool.type": "mcp",
+            "gen_ai.tool.call.id": "mcp_test",
+        }
+        assert tools[1].status.status_code == StatusCode.ERROR
+        assert tools[1].attributes["error.type"] == "mcp_call_failed"
+
+
+def test_non_streaming_telemetry_only_reports_terminal_mcp_calls(monkeypatch):
+    tracer = MagicMock()
+    monkeypatch.setattr(agent, "_TRACER", tracer)
+    items = [
+        SimpleNamespace(type="mcp_list_tools", id="list", status="completed"),
+        SimpleNamespace(type="mcp_approval_request", id="approval", name="search", status="completed"),
+        SimpleNamespace(type="mcp_call", id="running", name="search", status="in_progress"),
+        SimpleNamespace(type="mcp_call", id="done", name="search", status=None, output=""),
+        SimpleNamespace(type="mcp_call", id="denied", name="search", error="private-error-text"),
+    ]
+    response = ChatResponse(messages=[], raw_representation=SimpleNamespace(output=items))
+    context = ChatContext(client=MagicMock(), messages=[], options=None)
+
+    async def call_next():
+        context.result = response
+
+    asyncio.run(agent.trace_managed_mcp(context, call_next))
+
+    assert context.result is response
+    assert [
+        call.kwargs["attributes"]["gen_ai.tool.call.id"]
+        for call in tracer.start_as_current_span.call_args_list
+    ] == ["done", "denied"]
+    assert "private-error-text" not in repr(tracer.mock_calls)
