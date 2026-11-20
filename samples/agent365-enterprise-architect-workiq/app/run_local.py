@@ -37,6 +37,12 @@ def build_request(settings: LocalSettings, question: str, user_assertion: str) -
 
 
 async def main() -> int:
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger("agent_framework").setLevel(logging.DEBUG)
+    logging.getLogger("mcp").setLevel(logging.DEBUG)
+
     question = " ".join(sys.argv[1:]) or DEFAULT_QUESTION
     settings = get_local_settings()
     user_assertion = Path(settings.user_assertion_file).read_text(encoding="utf-8").strip()

@@ -177,7 +177,7 @@ class SandboxObservability:
 
     async def tool_middleware(
         self, context: FunctionInvocationContext,
-        call_next: Callable[[FunctionInvocationContext], Awaitable[None]],
+        call_next: Callable[[], Awaitable[None]],
     ) -> None:
         arguments = str(context.arguments) if self._capture_content else "[content omitted]"
         with ExecuteToolScope.start(
@@ -186,7 +186,7 @@ class SandboxObservability:
             self.agent_details,
             self.user_details,
         ) as scope:
-            await call_next(context)
+            await call_next()
             scope.record_response(str(context.result) if self._capture_content else "[content omitted]")
 
     async def close(self) -> None:

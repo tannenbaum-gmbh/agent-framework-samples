@@ -244,6 +244,7 @@ async def run_request(
             model=request["model_deployment"],
             credential=credential,
         )
+        client.function_invocation_configuration["include_detailed_errors"] = True
         agent = Agent(
             client=client,
             id=identity["agent_identity"],

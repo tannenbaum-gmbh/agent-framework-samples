@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Generator
 from unittest.mock import AsyncMock
 
@@ -211,7 +212,10 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
     monkeypatch.setattr(agent_framework_agent.AgentIdentityCredential, "close", close)
     from app import workiq
     monkeypatch.setattr(workiq, "create_tools", lambda credential, **kwargs: ([], []))
-    monkeypatch.setattr(agent_framework.foundry, "FoundryChatClient", lambda **kwargs: object())
+    monkeypatch.setattr(
+        agent_framework.foundry, "FoundryChatClient",
+        lambda **kwargs: SimpleNamespace(function_invocation_configuration={}),
+    )
 
     class FakeAgent:
         def __init__(self, **kwargs: Any) -> None:
@@ -257,8 +261,8 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
 def test_real_tool_spans_preserve_parentage_redaction_and_failures(
     tracing: tuple[InMemorySpanExporter, dict[str, Any]], capture_content: bool, fail_tool: bool,
 ) -> None:
-    from agent_framework import Agent, FunctionInvocationContext, tool
-    from agent_framework.foundry import FoundryChatClient
+    from agent_framework import FunctionInvocationContext, tool
+    from agent_framework._middleware import FunctionMiddlewarePipeline
 
     @tool
     def search(query: str) -> str:
@@ -266,24 +270,22 @@ def test_real_tool_spans_preserve_parentage_redaction_and_failures(
         return "private document"
 
     telemetry = make_telemetry(AsyncMock(), capture_content=capture_content)
-    client = FoundryChatClient(
-        project_endpoint="https://example.test/api/projects/p", model="gpt-5", credential=AsyncMock()
-    )
-    Agent(client=client, tools=[search], middleware=[telemetry.tool_middleware])
+    pipeline = FunctionMiddlewarePipeline(telemetry.tool_middleware)
 
-    async def execute(context: FunctionInvocationContext) -> None:
+    async def execute(context: FunctionInvocationContext) -> str:
         if fail_tool:
             raise RuntimeError("WorkIQ unavailable")
-        context.result = search(query="private query")
+        return search(query=context.arguments["query"])
 
     async def exercise() -> None:
         await telemetry.start()
         try:
             with telemetry.invocation("question"):
                 with telemetry.inference("question", "gpt-5"):
-                    await telemetry.tool_middleware(
+                    result = await pipeline.execute(
                         FunctionInvocationContext(function=search, arguments={"query": "private query"}), execute
                     )
+                    assert result == "private document"
         finally:
             await telemetry.close()
 

@@ -406,6 +406,10 @@ refresh, and shutdown flushing. Real Work IQ executions produce `execute_tool` s
 Caller attribution uses the user object ID from the successfully exchanged Foundry
 token rather than the blueprint sponsor.
 
+Tool telemetry middleware calls `await call_next()` without arguments; Agent Framework
+already binds the invocation context. Passing the context to this callback raises a
+`TypeError` before the Work IQ request is sent.
+
 Content, including tool arguments/results, is redacted by default. Enable capture only
 when prompts, responses, and Microsoft 365 data are approved for telemetry storage.
 Identity/caller metadata is still exported. A successful answer or flush does not
