@@ -13,7 +13,7 @@ from typing import Any, Callable
 from .config import Settings
 
 WORKSPACE = "/workspace"
-REMOTE_AGENT = f"{WORKSPACE}/sandbox_agent.py"
+REMOTE_AGENT = f"{WORKSPACE}/agent_framework_agent.py"
 REMOTE_REQUIREMENTS = f"{WORKSPACE}/requirements-sandbox.txt"
 REMOTE_REQUEST = f"{WORKSPACE}/request.json"
 
@@ -103,7 +103,7 @@ class AgentIdentitySandboxAgent:
             await credential.close()
 
     async def _upload_runtime(self, sandbox: Any, question: str, user_assertion: str) -> None:
-        source = Path(__file__).with_name("sandbox_agent.py").read_text(encoding="utf-8")
+        source = Path(__file__).with_name("agent_framework_agent.py").read_text(encoding="utf-8")
         requirements = Path(__file__).parents[1].joinpath("requirements-sandbox.txt").read_text(encoding="utf-8")
         request = {
             "tenant_id": self._settings.identity.tenant_id,

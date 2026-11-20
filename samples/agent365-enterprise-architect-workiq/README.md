@@ -91,6 +91,49 @@ or persistent-workspace integrations.
   Copilot licensing; verify current availability and billing requirements for your tenant.
 - Agent ID Developer (or an applicable higher role) for blueprint creation.
 
+## Run locally with the Microsoft Entra SDK sidecar
+
+As an alternative to the sandbox, `python -m app.run_local` runs the same agent as a
+plain local process that simulates any hosting platform. It holds **no** blueprint
+credential: every token (delegated Foundry and Work IQ via OBO, app-only telemetry)
+is negotiated by the [Microsoft Entra SDK for AgentID sidecar](https://learn.microsoft.com/entra/agent-id/authentication-with-auth-sdk-sidecar),
+which owns the blueprint credential and the blueprint -> agent identity exchange.
+Foundry remains the LLM backend.
+
+```text
+agent process --Bearer user token + AgentIdentity--> sidecar /AuthorizationHeader/Agent
+              <-- delegated Foundry / Work IQ token (OBO) --
+agent process --AgentIdentity--> sidecar /AuthorizationHeaderUnauthenticated/AgentApp
+              <-- app-only Agent 365 telemetry token --
+```
+
+Prerequisites are the same registration and delegated authorization as below, except
+no sandbox and no managed-identity federation. A managed identity is unavailable
+locally, so the sidecar uses a blueprint client secret
+(`AGENT_BLUEPRINT_CLIENT_SECRET`); in Azure use `SignedAssertionFromManagedIdentity`.
+
+```bash
+cd samples/agent365-enterprise-architect-workiq
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-sandbox.txt
+set -a; source .env; set +a
+python -m app.sign_in                                  # writes the user assertion
+docker compose -f docker-compose.sidecar.yml up -d     # sidecar on 127.0.0.1:5000
+curl http://localhost:5000/healthz
+python -m app.run_local "Summarize architecture guidance in my documents"
+docker compose -f docker-compose.sidecar.yml down
+```
+
+Install both requirements files into the same Python environment used to run the
+agent. The sandbox requirements are also needed locally because the local runner
+imports and executes the sandbox agent.
+
+The sidecar API must stay on loopback or a private network. Two downstream entries are
+configured: `Agent` (delegated; scopes overridden per call) and `AgentApp` with
+`RequestAppToken=true` (telemetry); without that flag the sidecar attempts a user flow.
+The inbound user token must be audience-bound to the blueprint, as in the sandbox flow.
+
 ## 1. Prepare a fresh registration
 
 ```bash
@@ -363,6 +406,10 @@ refresh, and shutdown flushing. Real Work IQ executions produce `execute_tool` s
 Caller attribution uses the user object ID from the successfully exchanged Foundry
 token rather than the blueprint sponsor.
 
+Tool telemetry middleware calls `await call_next()` without arguments; Agent Framework
+already binds the invocation context. Passing the context to this callback raises a
+`TypeError` before the Work IQ request is sent.
+
 Content, including tool arguments/results, is redacted by default. Enable capture only
 when prompts, responses, and Microsoft 365 data are approved for telemetry storage.
 Identity/caller metadata is still exported. A successful answer or flush does not
@@ -392,7 +439,7 @@ token. HTTP redirects are disabled; the endpoint is fixed to the official HTTPS 
 | [app/agent_token.py](app/agent_token.py) | FMI exchange, app-only management/export tokens, and child-identity OBO. |
 | [app/workiq.py](app/workiq.py) | Unified Work IQ MCP endpoint, explicit delegated scopes, and live tool discovery. |
 | [app/host.py](app/host.py) | Sandbox provisioning, protected request transfer, execution, and cleanup. |
-| [app/sandbox_agent.py](app/sandbox_agent.py) | Delegated Foundry credential and tool-enabled enterprise architect. |
+| [app/agent_framework_agent.py](app/agent_framework_agent.py) | Agent Framework agent process, delegated Foundry credential, and tool-enabled enterprise architect. |
 | [app/observability.py](app/observability.py) | App-only export, caller attribution, model/tool scopes, and flushing. |
 | [app/manage_identity.py](app/manage_identity.py) | Optional Graph identity-management CLI. |
 

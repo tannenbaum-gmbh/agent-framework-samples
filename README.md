@@ -7,7 +7,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 
 | Path | Description |
 | --- | --- |
-| [`.devcontainer/`](.devcontainer) | Codespaces/devcontainer environment with Python, Azure CLI, Bicep, .NET 8 SDK, PowerShell 7+, and the Agent 365 CLI (`a365`), ready to work with Azure and Microsoft Foundry. |
+| [`.devcontainer/`](.devcontainer) | Codespaces/devcontainer environment with Python, Docker Engine, Docker Compose, Buildx, Azure CLI, Bicep, .NET 8 SDK, PowerShell 7+, and the Agent 365 CLI (`a365`), ready to work with Azure and Microsoft Foundry. |
 | [`infra/`](infra) | Bicep IaC (using the [Azure Verified Module `avm/res/cognitive-services/account`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/cognitive-services/account)) that deploys a Microsoft Foundry account with a GPT-5 model deployment and an AI Foundry project, plus an optional Azure Container Apps sandbox group. |
 | [`samples/prompt-agent/`](samples/prompt-agent) | A minimal prompt agent that sends one prompt to a Microsoft Foundry model and prints the response. |
 | [`samples/mslearn-prompt-agent/`](samples/mslearn-prompt-agent) | A persistent Foundry prompt agent with Microsoft Learn MCP tools, designed for comparison with the hosted-agent sample. |
@@ -28,7 +28,7 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
 
 ## Getting started
 
-1. Open this repository in a [GitHub Codespace](https://docs.github.com/en/codespaces) (or reopen it in VS Code's Dev Containers) to get Python, the Azure CLI, Bicep, PowerShell 7+, and the Agent 365 CLI (`a365`) pre-installed.
+1. Open this repository in a [GitHub Codespace](https://docs.github.com/en/codespaces) (or reopen it in VS Code's Dev Containers) to get Python, Docker, the Azure CLI, Bicep, PowerShell 7+, and the Agent 365 CLI (`a365`) pre-installed.
 2. Deploy the Microsoft Foundry environment described in [`infra/README.md`](infra/README.md).
 3. Run a sample:
    - [`samples/prompt-agent/README.md`](samples/prompt-agent/README.md)
@@ -47,6 +47,29 @@ Samples for building AI agents with [Microsoft Agent Framework](https://learn.mi
    - [`samples/agent365-identity-agent/README.md`](samples/agent365-identity-agent/README.md)
    - [`samples/agent365-enterprise-architect-workiq/README.md`](samples/agent365-enterprise-architect-workiq/README.md)
    - [`samples/mslearn-hosted-agent/README.md`](samples/mslearn-hosted-agent/README.md)
+
+### Docker in Codespaces
+
+The devcontainer includes Docker Engine, Docker Compose, and Buildx through the
+[Docker-in-Docker feature](https://github.com/devcontainers/features/tree/main/src/docker-in-docker).
+It runs a dedicated Docker daemon inside the privileged devcontainer rather than
+using the host's Docker socket. Docker data is stored in named volumes.
+
+The base image's Yarn signing key is refreshed in
+[`.devcontainer/Dockerfile`](.devcontainer/Dockerfile) before features are installed.
+This prevents `NO_PUBKEY` errors during feature installation; a refresh in
+`postCreateCommand` would run too late to fix a build failure.
+
+For an existing Codespace, run **Codespaces: Rebuild Container** from the Command
+Palette (or **Dev Containers: Rebuild Container** locally). Once the rebuild
+finishes, open a new terminal and verify:
+
+```bash
+docker version
+docker compose version
+docker buildx version
+docker run --rm hello-world
+```
 
 ### Agent 365 CLI in Codespaces
 

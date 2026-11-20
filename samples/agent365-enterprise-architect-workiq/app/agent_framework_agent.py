@@ -1,5 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
-"""Agent Framework process executed inside the sandbox as an Entra agent identity."""
+"""Agent Framework agent process executed locally or inside the sandbox as an Entra agent identity."""
 
 from __future__ import annotations
 
@@ -184,6 +184,13 @@ async def run(request_path: Path) -> dict[str, Any]:
         request["tenant_id"], request["blueprint_app_id"], request["agent_identity_client_id"],
         request.get("managed_identity_client_id"),
     )
+    return await run_request(request, credential, export_credential)
+
+
+async def run_request(
+    request: dict[str, Any], credential: AsyncTokenCredential, export_credential: AsyncTokenCredential,
+) -> dict[str, Any]:
+    """Run the agent with the given delegated and app-only (telemetry) credentials."""
     telemetry: SandboxObservability | None = None
     resources = AsyncExitStack()
     try:
@@ -237,6 +244,7 @@ async def run(request_path: Path) -> dict[str, Any]:
             model=request["model_deployment"],
             credential=credential,
         )
+        client.function_invocation_configuration["include_detailed_errors"] = True
         agent = Agent(
             client=client,
             id=identity["agent_identity"],
