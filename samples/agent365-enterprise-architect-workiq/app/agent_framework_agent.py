@@ -1,5 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
-"""Agent Framework process executed inside the sandbox as an Entra agent identity."""
+"""Agent Framework agent process executed locally or inside the sandbox as an Entra agent identity."""
 
 from __future__ import annotations
 

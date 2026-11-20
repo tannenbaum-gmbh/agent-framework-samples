@@ -21,7 +21,7 @@ from opentelemetry.trace import StatusCode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import observability, sandbox_agent  # noqa: E402
+from app import agent_framework_agent, observability  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from microsoft.opentelemetry.a365.core.exporters.span_processor import A365SpanProcessor  # noqa: E402
 from microsoft.opentelemetry.a365.core.opentelemetry_scope import OpenTelemetryScope  # noqa: E402
@@ -206,9 +206,9 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
     )
     acquire = AsyncMock(return_value=AccessToken(token, int(time.time()) + 3600))
     close = AsyncMock()
-    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "get_token", acquire)
-    monkeypatch.setattr(sandbox_agent.DelegatedAgentCredential, "get_token", acquire)
-    monkeypatch.setattr(sandbox_agent.AgentIdentityCredential, "close", close)
+    monkeypatch.setattr(agent_framework_agent.AgentIdentityCredential, "get_token", acquire)
+    monkeypatch.setattr(agent_framework_agent.DelegatedAgentCredential, "get_token", acquire)
+    monkeypatch.setattr(agent_framework_agent.AgentIdentityCredential, "close", close)
     from app import workiq
     monkeypatch.setattr(workiq, "create_tools", lambda credential, **kwargs: ([], []))
     monkeypatch.setattr(agent_framework.foundry, "FoundryChatClient", lambda **kwargs: object())
@@ -236,12 +236,12 @@ def test_runtime_records_model_response_and_flushes_on_success_or_failure(
     }))
     if fail_model:
         with pytest.raises(RuntimeError, match="model unavailable"):
-            asyncio.run(sandbox_agent.run(path))
+            asyncio.run(agent_framework_agent.run(path))
     else:
-        assert asyncio.run(sandbox_agent.run(path))["answer"] == "answer"
+        assert asyncio.run(agent_framework_agent.run(path))["answer"] == "answer"
     close.assert_awaited_once()
     assert [call.args for call in acquire.await_args_list] == [
-        (sandbox_agent.FOUNDRY_SCOPE,), (observability.OBSERVABILITY_SCOPE,)
+        (agent_framework_agent.FOUNDRY_SCOPE,), (observability.OBSERVABILITY_SCOPE,)
     ]
     spans = tracing[0].get_finished_spans()
     assert len(spans) == 2

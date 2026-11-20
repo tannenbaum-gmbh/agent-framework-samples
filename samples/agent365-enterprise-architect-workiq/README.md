@@ -114,6 +114,8 @@ locally, so the sidecar uses a blueprint client secret
 
 ```bash
 cd samples/agent365-enterprise-architect-workiq
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-sandbox.txt
 set -a; source .env; set +a
 python -m app.sign_in                                  # writes the user assertion
@@ -433,7 +435,7 @@ token. HTTP redirects are disabled; the endpoint is fixed to the official HTTPS 
 | [app/agent_token.py](app/agent_token.py) | FMI exchange, app-only management/export tokens, and child-identity OBO. |
 | [app/workiq.py](app/workiq.py) | Unified Work IQ MCP endpoint, explicit delegated scopes, and live tool discovery. |
 | [app/host.py](app/host.py) | Sandbox provisioning, protected request transfer, execution, and cleanup. |
-| [app/sandbox_agent.py](app/sandbox_agent.py) | Delegated Foundry credential and tool-enabled enterprise architect. |
+| [app/agent_framework_agent.py](app/agent_framework_agent.py) | Agent Framework agent process, delegated Foundry credential, and tool-enabled enterprise architect. |
 | [app/observability.py](app/observability.py) | App-only export, caller attribution, model/tool scopes, and flushing. |
 | [app/manage_identity.py](app/manage_identity.py) | Optional Graph identity-management CLI. |
 

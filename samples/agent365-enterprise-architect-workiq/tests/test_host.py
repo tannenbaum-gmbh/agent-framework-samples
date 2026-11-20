@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import IdentitySettings, Settings  # noqa: E402
 from app.host import AgentIdentitySandboxAgent  # noqa: E402
-from app.sandbox_agent import describe_identity  # noqa: E402
+from app.agent_framework_agent import describe_identity  # noqa: E402
 
 SETTINGS = Settings(
     foundry_project_endpoint="https://example.services.ai.azure.com/api/projects/demo",
@@ -61,7 +61,7 @@ class FakeSandbox:
 
     async def exec(self, command: str, **kwargs: Any) -> ExecResult:
         self.commands.append(command)
-        return ExecResult(stdout=f"some log line\n{SANDBOX_OUTPUT}\n" if "sandbox_agent.py" in command else "")
+        return ExecResult(stdout=f"some log line\n{SANDBOX_OUTPUT}\n" if "agent_framework_agent.py" in command else "")
 
     async def delete(self) -> None:
         self.deleted = True
@@ -108,7 +108,7 @@ def test_agent_runs_in_sandbox_as_agent_identity_without_secrets_in_commands() -
     assert request["blueprint_app_id"] == "blueprint-app"
     assert request["managed_identity_client_id"] == "managed-identity-client"
     assert set(sandbox.files) == {
-        "/workspace/sandbox_agent.py", "/workspace/agent_token.py",
+        "/workspace/agent_framework_agent.py", "/workspace/agent_token.py",
         "/workspace/requirements-sandbox.txt", "/workspace/request.json",
         "/workspace/workiq.py",
     }
@@ -165,7 +165,7 @@ def test_observability_uploads_code_and_sponsor_without_credentials(
     class LoggingSandbox(FakeSandbox):
         async def exec(self, command: str, **kwargs: Any) -> ExecResult:
             result = await super().exec(command, **kwargs)
-            if command.startswith("python3 /workspace/sandbox_agent.py"):
+            if command.startswith("python3 /workspace/agent_framework_agent.py"):
                 result.stderr = "HTTP 200 - spans exported\n"
             return result
 
@@ -200,7 +200,7 @@ def test_observability_uploads_code_and_sponsor_without_credentials(
 def test_sandbox_token_failure_is_reported_and_compute_is_cleaned_up() -> None:
     class FailingSandbox(FakeSandbox):
         async def exec(self, command: str, **kwargs: Any) -> ExecResult:
-            if command.startswith("python3 /workspace/sandbox_agent.py"):
+            if command.startswith("python3 /workspace/agent_framework_agent.py"):
                 return ExecResult(exit_code=1, stderr="Agent identity token request failed: disabled")
             return await super().exec(command, **kwargs)
 

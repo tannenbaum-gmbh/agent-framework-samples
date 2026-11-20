@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .config import LocalSettings, get_local_settings
-from .sandbox_agent import run_request
+from .agent_framework_agent import run_request
 from .sidecar import SidecarCredential
 
 DEFAULT_QUESTION = "Find architecture guidance in my Microsoft 365 documents and summarize it with source links."
