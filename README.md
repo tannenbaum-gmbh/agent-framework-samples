@@ -55,6 +55,11 @@ The devcontainer includes Docker Engine, Docker Compose, and Buildx through the
 It runs a dedicated Docker daemon inside the privileged devcontainer rather than
 using the host's Docker socket. Docker data is stored in named volumes.
 
+The base image's Yarn signing key is refreshed in
+[`.devcontainer/Dockerfile`](.devcontainer/Dockerfile) before features are installed.
+This prevents `NO_PUBKEY` errors during feature installation; a refresh in
+`postCreateCommand` would run too late to fix a build failure.
+
 For an existing Codespace, run **Codespaces: Rebuild Container** from the Command
 Palette (or **Dev Containers: Rebuild Container** locally). Once the rebuild
 finishes, open a new terminal and verify:
