@@ -1,0 +1,2 @@
+# Local deployment state; contains the endpoint API key.
+.sandbox-state.json
