@@ -2,7 +2,7 @@
 // - A resource group
 // - A Cognitive Services (`AIServices` kind) account, deployed via the Azure Verified
 //   Module `avm/res/cognitive-services/account`
-// - GPT-5 and GPT-5.3 Codex model deployments on that account
+// - GPT-5, GPT-5.3 Codex, and GPT-6.1 Sol model deployments on that account
 // - An AI Foundry project on the account, ready to be used with Agent Framework
 // - Optionally, an Azure Container Apps sandbox group (preview) used by the
 //   `sandbox-code-agent-evals` sample to run agent-generated code in isolation
@@ -55,6 +55,18 @@ param gpt53CodexSkuName string = 'GlobalStandard'
 @description('Optional. Tokens-per-minute capacity (in units of 1,000) for the GPT-5.3 Codex deployment.')
 param gpt53CodexSkuCapacity int = 10
 
+@description('Optional. Name of the GPT-6.1 Sol model deployment.')
+param gpt61SolDeploymentName string = 'gpt-6.1-sol'
+
+@description('Optional. Model version for the GPT-6.1 Sol deployment.')
+param gpt61SolModelVersion string = '2026-09-29'
+
+@description('Optional. Deployment SKU name for the GPT-6.1 Sol model.')
+param gpt61SolSkuName string = 'GlobalStandard'
+
+@description('Optional. Tokens-per-minute capacity (in units of 1,000) for the GPT-6.1 Sol deployment.')
+param gpt61SolSkuCapacity int = 10
+
 @description('Optional. Deploy an Azure Container Apps sandbox group (preview) for the `sandbox-code-agent-evals` sample.')
 param deploySandboxGroup bool = false
 
@@ -98,6 +110,10 @@ module foundry 'modules/ai-foundry.bicep' = {
     gpt53CodexModelVersion: gpt53CodexModelVersion
     gpt53CodexSkuName: gpt53CodexSkuName
     gpt53CodexSkuCapacity: gpt53CodexSkuCapacity
+    gpt61SolDeploymentName: gpt61SolDeploymentName
+    gpt61SolModelVersion: gpt61SolModelVersion
+    gpt61SolSkuName: gpt61SolSkuName
+    gpt61SolSkuCapacity: gpt61SolSkuCapacity
     tags: tags
   }
 }
@@ -128,6 +144,9 @@ output gpt5DeploymentName string = foundry.outputs.gpt5DeploymentName
 
 @description('The name of the GPT-5.3 Codex model deployment.')
 output gpt53CodexDeploymentName string = foundry.outputs.gpt53CodexDeploymentName
+
+@description('The name of the GPT-6.1 Sol model deployment.')
+output gpt61SolDeploymentName string = foundry.outputs.gpt61SolDeploymentName
 
 @description('The name of the Azure Container Apps sandbox group, or an empty string when `deploySandboxGroup` is false.')
 output sandboxGroupName string = deploySandboxGroup ? sandbox!.outputs.sandboxGroupName : ''

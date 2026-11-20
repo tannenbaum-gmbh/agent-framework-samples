@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from agent_framework import Agent
+from collections.abc import Awaitable, Callable
+
+from agent_framework import Agent, ChatContext, ChatResponse, ChatResponseUpdate, chat_middleware
 from agent_framework.foundry import FoundryChatClient
 from azure.ai.agentserver.core import get_request_context
 from azure.ai.projects.models import MCPTool
 from azure.core.credentials import TokenCredential
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, StatusCode
 
 from .config import Settings
 
@@ -14,6 +18,7 @@ AGENT_NAME = "mea-hosted-agent"
 DISPLAY_NAME = "Microsoft Enterprise Architect Hosted"
 MSLEARN_MCP_URL = "https://learn.microsoft.com/api/mcp"
 WORKIQ_MCP_URL = "https://workiq.svc.cloud.microsoft/mcp"
+_TRACER = trace.get_tracer(__name__)
 DEFAULT_QUESTION = (
     "Create an Azure architecture for business automation: process supplier "
     "invoices, route approvals, and integrate with an ERP. Apply our internal "
@@ -81,6 +86,55 @@ def create_tools(settings: Settings) -> list[MCPTool]:
     ]
 
 
+@chat_middleware
+async def trace_managed_mcp(context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
+    """Report completed server-side calls using the host's existing tracer provider."""
+    seen: set[str] = set()
+
+    def record(item: object) -> None:
+        if getattr(item, "type", None) != "mcp_call":
+            return
+        call_id = getattr(item, "id", None) or getattr(item, "call_id", None)
+        name = getattr(item, "name", None)
+        if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+            return
+        status = getattr(item, "status", None)
+        failed = getattr(item, "error", None) is not None or status in ("failed", "incomplete")
+        if not failed and status != "completed" and not (
+            status is None and getattr(item, "output", None) is not None
+        ):
+            return
+        if call_id in seen:
+            return
+        seen.add(call_id)
+        attributes = {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": name,
+            "gen_ai.tool.type": "mcp",
+            "gen_ai.tool.call.id": call_id,
+        }
+        # The response reports execution, but does not give us the tool's timing.
+        with _TRACER.start_as_current_span(
+            f"execute_tool {name}", kind=SpanKind.INTERNAL, attributes=attributes
+        ) as span:
+            if failed:
+                span.set_attribute("error.type", "mcp_call_failed")
+                span.set_status(StatusCode.ERROR)
+
+    def observe_update(update: ChatResponseUpdate) -> ChatResponseUpdate:
+        for content in update.contents:
+            if content.type == "mcp_server_tool_result":
+                record(content.raw_representation)
+        return update
+
+    if context.stream:
+        context.stream_update_transforms.append(observe_update)
+    await call_next()
+    if isinstance(context.result, ChatResponse):
+        for item in getattr(context.result.raw_representation, "output", None) or ():
+            record(item)
+
+
 def create_agent(settings: Settings, credential: TokenCredential) -> Agent:
     tools = create_tools(settings)
     return Agent(
@@ -90,6 +144,7 @@ def create_agent(settings: Settings, credential: TokenCredential) -> Agent:
             credential=credential,
             # Forward only the SDK's first-party caller context, never a user token.
             default_headers=get_request_context().platform_headers(),
+            middleware=[trace_managed_mcp],
         ),
         name=AGENT_NAME,
         instructions=INSTRUCTIONS,
