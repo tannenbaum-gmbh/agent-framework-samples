@@ -1,6 +1,6 @@
 # Microsoft Enterprise Architect Hosted
 
-A separate **Foundry hosted agent** using the same direct MCP pattern as
+A separate **Foundry hosted agent** with the same sources as
 [`microsoft-enterprise-architect-prompt`](../microsoft-enterprise-architect-prompt):
 **Work IQ MCP provides all Microsoft 365 tools**, including SharePoint and
 OneDrive documents, mail, Teams, calendars, and available agents.
@@ -21,35 +21,36 @@ CLI / Foundry playground / published Teams personal chat
                          |
            Agent Framework + FoundryChatClient
                          |
-         Microsoft Learn MCP + Work IQ MCP
+    Microsoft Learn MCP + Foundry Toolbox -> Work IQ MCP
                          |
     SharePoint / OneDrive / Mail / Teams / Calendar / Agents
 ```
 
-Both tools are native Foundry-managed `MCPTool` configurations with
-`require_approval="never"` and no `allowed_tools` restrictions. Microsoft Learn
-uses `https://learn.microsoft.com/api/mcp` without an authenticated connection.
-Work IQ uses `https://workiq.svc.cloud.microsoft/mcp` and an existing Foundry
-project connection for delegated OAuth. The full live catalogs are exposed;
+Microsoft Learn is a public, model-side `MCPTool`. Work IQ is exposed to the host
+through a dedicated Foundry Toolbox, backed by an existing delegated connection
+to `https://workiq.svc.cloud.microsoft/mcp`. Both are configured with
+`require_approval="never"` and no `allowed_tools` restrictions. The full live catalogs are exposed;
 no client-side allowlist freezes the available tools. Use live schemas rather
 than assuming resource paths or supported operations.
 
-**Behavior change:** the former toolbox, web search, read-only work-context
-instructions, and interactive approvals are removed. Explicitly requested,
-authorized writes and actions can execute without confirmation prompts.
+Explicitly requested, authorized writes and actions can execute without confirmation prompts.
 Work IQ is required; there is no private-tools opt-out. Use only a disposable
 tenant and synthetic data. OAuth consent, source permissions, administrator
 consent, and tenant policy still apply. Work IQ blocks mutations by default;
 exposing a tool does not prove that the tenant allows it.
 
-The request-scoped factory creates fresh model clients and forwards the hosting
-SDK's first-party platform headers to Foundry. The opaque call ID lets Foundry
-resolve caller context; no participant token or client secret is copied into
-the application or ZIP. Foundry manages MCP execution and connection
-authentication, not a local toolbox client. Model response storage is disabled
-because the hosting infrastructure manages conversation history. The platform
-agent identity authenticates the model call; it does **not** substitute for each
-user's Microsoft 365 consent.
+**Why the hosted path differs:** the prompt agent's tool is executed as part of
+a Foundry invocation that already has the signed-in caller. The old hosted
+sample put Work IQ on a separate model call authenticated as the host. Passing a
+project connection ID (or forwarding the call ID only to the model endpoint)
+did not establish caller-bound Work IQ authorization at that boundary.
+
+The hosting SDK's `FoundryToolbox` forwards the current opaque call ID on
+toolbox MCP requests. The host credential authenticates to Foundry; the
+toolbox resolves the signed-in caller and applies the downstream delegated
+connection. The runtime rejects turns missing the platform user ID or call ID.
+It never retries Work IQ as the host or another user. No user token or OAuth
+client secret is packaged, and model response storage remains disabled.
 
 ## Prerequisites and connections
 
@@ -59,7 +60,8 @@ user's Microsoft 365 consent.
   [`infra/`](../../infra) supplies the project/model, not hosted-agent
   deployment permissions.
 - `az login`; **Foundry Project Manager** at project scope for deployment and
-  **Foundry User** for invocation. Check current availability and permissions in
+  ARM read access to the Work IQ project connection for deployment. Check
+  current invocation roles and availability in
   the [hosted-agent source deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code).
 - Outbound access from the hosted runtime to Foundry and the MCP services.
 - A disposable Microsoft 365 workshop tenant, synthetic data, two users, and an
@@ -70,10 +72,16 @@ Reuse the prompt sample's setup in the **same Foundry project**:
 
 1. [Connect Work IQ](../microsoft-enterprise-architect-prompt/README.md#connect-work-iq-once)
    targeting `https://workiq.svc.cloud.microsoft/mcp`, not preview A2A.
-   Reuse the delegated OAuth connection, normally `workshop-workiq-mcp`.
-   Follow the linked guide's exact baseline OAuth scopes and optional
-   `WorkIQ.Act` permission expansion; Azure CLI login is not Microsoft 365
-   OAuth consent. Complete consent as each intended user.
+   For native Teams publishing and a first-use Work IQ consent screen, use
+   the `OAuth2` connection setup in that guide. This is per-user OAuth
+   passthrough, not Entra's `AgentOnBehalfOfUser` token exchange.
+   For literal Entra OBO, use a separate `AgentOnBehalfOfUser` connection
+   with `api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask`, configure the
+   [agent blueprint endpoint and delegated consent](https://learn.microsoft.com/azure/foundry/agents/how-to/configure-user-delegation),
+   and invoke with a blueprint-audience user token. Teams publishing's Bot
+   Service authorization alone does not establish blueprint access. Use
+   `OAuth2` for the Teams pilot unless blueprint delegation is verified on
+   that surface. Entra consent may already have been granted by an admin.
 2. Verify the full Work IQ catalog, including SharePoint retrieval. Configure
    only the supported mutation exercises needed in the disposable tenant
    using [Work IQ policy governance](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/mcp/policy-governance-mcp).
@@ -84,7 +92,7 @@ Reuse the prompt sample's setup in the **same Foundry project**:
    IDs; give participants read access and use a controlled output folder.
    Deployment does not upload documents or create a vector store.
 
-No toolbox or separate SharePoint connection is needed. A connection configured
+Deployment creates the Work IQ toolbox; no separate SharePoint connection is needed. A connection configured
 only in Copilot Studio is not automatically a Foundry connection. Missing
 consent, permissions, billing, or unsupported schemas must be resolved at the
 source; the code never substitutes fixtures, another user, or another server.
@@ -112,11 +120,11 @@ python -m app.invoke
 Environment files are not loaded automatically; source only trusted shell values.
 No tokens or secrets belong in `.env`.
 
-Deployment requires `WORKIQ_CONNECTION_NAME`. It resolves that connection in
-the configured project, validates its MCP target and nonempty ID before upload,
-and passes the resolved ID as `WORKIQ_CONNECTION_ID` to the hosted runtime.
-It does not retrieve connection credentials or change connection permissions.
-Microsoft Learn needs no connection.
+Deployment requires `WORKIQ_CONNECTION_NAME`. Before uploading, it verifies the
+connection's MCP target and reads its ARM auth type (not its credentials).
+Anything other than `OAuth2` or `AgentOnBehalfOfUser` is rejected. It creates a
+version of `<agent-name>-workiq` with that connection and pins the hosted
+runtime to that version. Microsoft Learn needs no connection.
 
 Only `main.py`, `requirements.txt`, `app/__init__.py`, `app/agent.py`,
 `app/config.py`, and `app/host.py` are packaged. Foundry installs dependencies
@@ -128,15 +136,17 @@ change happens on provisioning failure. Failed versions remain for
 troubleshooting; the temporary local ZIP is always removed.
 
 The runtime receives only non-secret endpoint/model values and
-`WORKIQ_CONNECTION_ID`; a missing ID fails explicitly. If starting `python main.py`
-locally, also set that ID to the existing connection's full ID. Model selection
+`WORKIQ_TOOLBOX_NAME` and `WORKIQ_TOOLBOX_VERSION`. A bare local Responses
+request does not have Foundry's signed-in caller context; use a deployed
+endpoint to exercise Work IQ. Model selection
 prefers `FOUNDRY_MODEL_DEPLOYMENT`, then `AZURE_AI_MODEL_DEPLOYMENT_NAME`, then
 the sample default.
 
-For migration, replace `TOOLBOX_NAME`/`TOOLBOX_VERSION` in your local environment
-with `WORKIQ_CONNECTION_NAME` and redeploy. Toolbox settings are no longer read.
-The old `--without-toolbox`, `--without-workiq`, and `--review-m365-tools` flags
-are removed. The shared toolbox is neither used nor deleted.
+For migration, remove any old `WORKIQ_CONNECTION_ID`, set
+`WORKIQ_CONNECTION_NAME`, and redeploy. If anyone may have received another
+user's data, disable the affected Teams distribution now and follow your
+incident-response process. Use a separate agent name for a synthetic-data
+pilot rather than immediately routing the existing Teams endpoint to the fix.
 
 Rerunning deployment creates another version and switches endpoint traffic.
 Use `--name custom-mea-hosted` on **deploy, invoke, and delete** to isolate
@@ -160,7 +170,9 @@ python -m app.invoke \
 
 The sample uses the Foundry host's existing OpenTelemetry configuration. It
 adds an `execute_tool` span when the model response reports a completed or
-failed managed MCP call. The span includes the tool name, type, and call ID,
+failed Microsoft Learn MCP call. Work IQ calls now execute as Agent Framework
+tools through the toolbox, not as model-side `mcp_call` items. The Microsoft
+Learn span includes the tool name, type, and call ID,
 not the tool arguments, results, or error text. Its duration is not the remote
 tool's execution time. Work IQ execution and delegated OAuth stay with Foundry.
 
@@ -211,11 +223,13 @@ Foundry handles bot registration; adding the agent to Teams grants no mailbox
 or SharePoint access. For private-network projects, use the publishing guide's
 REST path without opening account-wide public access.
 
-Verify delegated consent, distinct participant contexts, authorized operations,
-and tenant-policy denials on the hosted playground/Teams surface before
-distribution. If a surface cannot present delegated consent, record the
-limitation rather than publishing it as working. Keep private data in personal
-chats, not groups/channels. Mermaid may appear as code in Teams.
+**Release gate:** In two Teams personal chats, use fresh synthetic accounts A
+and B. Give each an exclusive test message. Have A consent and retrieve A's
+message. Before B consents, confirm B gets a consent prompt or a denial, not
+A's data. After B consents, verify each can retrieve only their own message and
+that explicit cross-user reads fail in both directions. Repeat in existing
+chats and after reconnecting. If consent or caller isolation fails, do not
+distribute. Keep private data in personal chats, not groups/channels.
 
 Confidentiality, injection resistance, and no-overwrite rules are model
 instructions, **not DLP or authorization enforcement**. Rely on source
@@ -234,7 +248,7 @@ python -m app.delete
 python -m app.delete --name custom-mea-hosted
 ```
 
-This leaves shared project/model resources, connections, any existing toolbox,
+This leaves shared project/model resources, connections, toolbox versions,
 the prompt agent, and SharePoint content intact. Manually remove only
 workshop-created files. Hosted compute, builds, model calls, and M365 tools may
 incur charges.
