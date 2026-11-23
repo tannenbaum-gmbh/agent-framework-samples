@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from azure.ai.projects import AIProjectClient
@@ -16,15 +18,40 @@ from azure.ai.projects.models import (
     CodeDependencyResolution,
     FixedRatioVersionSelectionRule,
     HostedAgentDefinition,
+    MCPToolboxTool,
     ProtocolConfiguration,
     ProtocolVersionRecord,
     ResponsesProtocolConfiguration,
     VersionSelector,
 )
+from azure.core.credentials import TokenCredential
+from azure.core.pipeline import Pipeline
+from azure.core.pipeline.policies import BearerTokenCredentialPolicy
+from azure.core.pipeline.transport import HttpRequest, RequestsTransport
 from azure.identity import DefaultAzureCredential
 
 from .agent import AGENT_NAME, WORKIQ_MCP_URL
 from .config import get_settings
+
+
+def get_connection_auth_type(connection_id: str, credential: TokenCredential) -> str:
+    # Read ARM metadata, not the connection's credentials or listSecrets.
+    parts = connection_id.split("/")
+    if len(parts) != 13 or parts[0] or [part.lower() for part in parts[1::2]] != [
+        "subscriptions", "resourcegroups", "providers", "accounts", "projects", "connections",
+    ] or parts[6].lower() != "microsoft.cognitiveservices" or any(
+        not part or part in (".", "..") for part in parts[1:]
+    ):
+        raise ValueError("Expected an ARM project connection resource ID for Work IQ.")
+    url = f"https://management.azure.com{quote(connection_id, safe='/')}?api-version=2025-06-01"
+    with Pipeline(
+        transport=RequestsTransport(),
+        policies=[BearerTokenCredentialPolicy(credential, "https://management.azure.com/.default")],
+    ) as pipeline:
+        response = pipeline.run(HttpRequest("GET", url)).http_response
+        if response.status_code != 200:
+            raise RuntimeError(f"Unable to verify Work IQ connection auth type (ARM HTTP {response.status_code}).")
+        return json.loads(response.text())["properties"]["authType"]
 
 
 def create_code_zip(source_dir: Path, zip_path: Path) -> None:
@@ -72,6 +99,20 @@ def main() -> None:
             )
         if not connection.id or not connection.id.strip():
             raise ValueError("Work IQ requires a connection ID.")
+        auth_type = get_connection_auth_type(connection.id, credential)
+        if auth_type not in {"OAuth2", "AgentOnBehalfOfUser"}:
+            raise RuntimeError("Work IQ requires an OAuth2 or AgentOnBehalfOfUser connection; shared auth is forbidden.")
+        toolbox = project.toolboxes.create_version(
+            name=f"{args.name}-workiq",
+            description="Work IQ MCP with per-user delegation for the hosted agent.",
+            tools=[MCPToolboxTool(
+                server_label="WorkIQ",
+                server_url=WORKIQ_MCP_URL,
+                project_connection_id=connection.id,
+                require_approval="never",
+            )],
+        )
+        print(f"Work IQ toolbox {toolbox.name}, version {toolbox.version}, auth {auth_type}", flush=True)
         zip_path = Path(temp_dir) / "agent.zip"
         create_code_zip(Path(__file__).resolve().parent.parent, zip_path)
         with zip_path.open("rb") as code:
@@ -91,7 +132,8 @@ def main() -> None:
                     environment_variables={
                         "FOUNDRY_PROJECT_ENDPOINT": settings.project_endpoint,
                         "AZURE_AI_MODEL_DEPLOYMENT_NAME": settings.model_deployment,
-                        "WORKIQ_CONNECTION_ID": connection.id,
+                        "WORKIQ_TOOLBOX_NAME": toolbox.name,
+                        "WORKIQ_TOOLBOX_VERSION": toolbox.version,
                     },
                 ),
                 code=code,

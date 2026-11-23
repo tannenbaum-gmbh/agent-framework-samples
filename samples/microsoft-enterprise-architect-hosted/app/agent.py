@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from agent_framework import Agent, ChatContext, ChatResponse, ChatResponseUpdate, chat_middleware
 from agent_framework.foundry import FoundryChatClient
+from agent_framework_foundry_hosting import FoundryToolbox
 from azure.ai.agentserver.core import get_request_context
 from azure.ai.projects.models import MCPTool
 from azure.core.credentials import TokenCredential
@@ -68,20 +69,22 @@ unsupported operations explicitly; never bypass these controls.
 """.strip()
 
 
-def create_tools(settings: Settings) -> list[MCPTool]:
-    if not settings.workiq_connection_id.strip():
-        raise ValueError("Work IQ requires WORKIQ_CONNECTION_ID; deploy with WORKIQ_CONNECTION_NAME.")
+def create_tools(settings: Settings, credential: TokenCredential) -> list[MCPTool | FoundryToolbox]:
+    if not settings.workiq_toolbox_name or not settings.workiq_toolbox_version:
+        raise ValueError("Work IQ requires a pinned toolbox version; deploy with WORKIQ_CONNECTION_NAME.")
     return [
         MCPTool(
             server_label="MicrosoftLearn",
             server_url=MSLEARN_MCP_URL,
             require_approval="never",
         ),
-        MCPTool(
-            server_label="WorkIQ",
-            server_url=WORKIQ_MCP_URL,
-            project_connection_id=settings.workiq_connection_id,
-            require_approval="never",
+        FoundryToolbox(
+            credential,
+            url=(
+                f"{settings.project_endpoint.rstrip('/')}/toolboxes/{settings.workiq_toolbox_name}"
+                f"/versions/{settings.workiq_toolbox_version}/mcp?api-version=v1"
+            ),
+            name="WorkIQ",
         ),
     ]
 
@@ -136,18 +139,19 @@ async def trace_managed_mcp(context: ChatContext, call_next: Callable[[], Awaita
 
 
 def create_agent(settings: Settings, credential: TokenCredential) -> Agent:
-    tools = create_tools(settings)
+    request = get_request_context()
+    if not request.call_id or not request.call_id.strip() or not request.user_id or not request.user_id.strip():
+        raise RuntimeError("Work IQ requires a signed-in user through a Foundry-hosted endpoint.")
     return Agent(
         client=FoundryChatClient(
             project_endpoint=settings.project_endpoint,
             model=settings.model_deployment,
             credential=credential,
-            # Forward only the SDK's first-party caller context, never a user token.
-            default_headers=get_request_context().platform_headers(),
+            default_headers=request.platform_headers(),
             middleware=[trace_managed_mcp],
         ),
         name=AGENT_NAME,
         instructions=INSTRUCTIONS,
-        tools=tools,
+        tools=create_tools(settings, credential),
         default_options={"store": False},
     )

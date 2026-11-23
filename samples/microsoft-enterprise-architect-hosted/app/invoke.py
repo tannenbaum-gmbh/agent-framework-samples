@@ -25,6 +25,11 @@ def main() -> None:
         response = client.responses.create(input=args.question, store=True)
         if args.debug:
             print(response.model_dump_json(indent=2), file=sys.stderr)
+        if any(item.type == "oauth_consent_request" for item in (response.output or ())):
+            raise RuntimeError(
+                "Work IQ consent is required. Open this agent in a consent-capable client "
+                "(such as the Foundry playground) as the intended user, grant consent, then retry."
+            )
         if response.status != "completed":
             raise RuntimeError(
                 f"Hosted agent response {response.status}: {response.error or response.incomplete_details}"
@@ -32,11 +37,6 @@ def main() -> None:
         for item in response.output:
             if item.type == "mcp_call" and item.error:
                 raise RuntimeError(f"MCP tool error: {item.error}")
-            if item.type == "oauth_consent_request":
-                raise RuntimeError(
-                    "MCP OAuth consent is required. Complete consent in the Foundry playground "
-                    "as the intended user, then retry."
-                )
             if item.type == "mcp_approval_request":
                 raise RuntimeError(
                     "Unexpected MCP approval request. Deploy a new version with app.deploy; "

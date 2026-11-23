@@ -12,9 +12,11 @@ from zipfile import ZipFile
 import httpx
 import httpx2
 import pytest
+from requests import Response, Session
 from agent_framework import ChatContext, ChatResponse
-from agent_framework_foundry_hosting import ResponsesHostServer
+from agent_framework_foundry_hosting import ResponsesHostServer, _toolbox
 from azure.ai.projects.models import AgentEndpointConfig
+from azure.core.credentials import AccessToken
 from openai import AsyncOpenAI
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -25,10 +27,14 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from app import agent, delete, deploy, host, invoke
 from app.config import Settings, get_settings
 
+CONNECTION_ID = (
+    "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.CognitiveServices"
+    "/accounts/example/projects/demo/connections/workshop-workiq-mcp"
+)
 SETTINGS = Settings(
     "https://example.services.ai.azure.com/api/projects/demo", "workshop-model",
     workiq_connection_name="workshop-workiq-mcp",
-    workiq_connection_id="/projects/demo/connections/workshop-workiq-mcp",
+    workiq_toolbox_name="mea-hosted-agent-workiq", workiq_toolbox_version="2",
 )
 
 
@@ -37,7 +43,7 @@ def clean_environment(monkeypatch):
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
     for name in (
         "FOUNDRY_PROJECT_ENDPOINT", "FOUNDRY_MODEL_DEPLOYMENT", "AZURE_AI_MODEL_DEPLOYMENT_NAME",
-        "WORKIQ_CONNECTION_NAME", "WORKIQ_CONNECTION_ID",
+        "WORKIQ_CONNECTION_NAME", "WORKIQ_TOOLBOX_NAME", "WORKIQ_TOOLBOX_VERSION",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -46,8 +52,12 @@ def clients(monkeypatch, module, argv):
     project = MagicMock()
     project.__enter__.return_value = project
     project.connections.get.return_value = SimpleNamespace(
-        target=agent.WORKIQ_MCP_URL, id=SETTINGS.workiq_connection_id,
+        target=agent.WORKIQ_MCP_URL, id=CONNECTION_ID,
     )
+    project.toolboxes.create_version.return_value = SimpleNamespace(
+        name=SETTINGS.workiq_toolbox_name, version=SETTINGS.workiq_toolbox_version,
+    )
+    monkeypatch.setattr(deploy, "get_connection_auth_type", MagicMock(return_value="OAuth2"))
     project.agents.create_version_from_code.return_value = SimpleNamespace(
         name=agent.AGENT_NAME, version="3",
     )
@@ -73,9 +83,6 @@ def expected_tools():
     return [
         {"type": "mcp", "server_label": "MicrosoftLearn",
          "server_url": agent.MSLEARN_MCP_URL, "require_approval": "never"},
-        {"type": "mcp", "server_label": "WorkIQ",
-         "server_url": agent.WORKIQ_MCP_URL, "require_approval": "never",
-         "project_connection_id": SETTINGS.workiq_connection_id},
     ]
 
 
@@ -90,22 +97,28 @@ def test_configuration_requires_endpoint_and_supports_hosted_model(monkeypatch):
     assert get_settings().model_deployment == "local-model"
 
 
-def test_workiq_configuration_separates_deployment_name_and_runtime_id(monkeypatch):
+def test_workiq_configuration_separates_connection_from_runtime_toolbox(monkeypatch):
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", SETTINGS.project_endpoint)
     assert get_settings().workiq_connection_name == ""
-    assert get_settings().workiq_connection_id == ""
+    assert get_settings().workiq_toolbox_name == ""
     monkeypatch.setenv("WORKIQ_CONNECTION_NAME", " workshop-workiq-mcp ")
-    monkeypatch.setenv("WORKIQ_CONNECTION_ID", f" {SETTINGS.workiq_connection_id} ")
+    monkeypatch.setenv("WORKIQ_TOOLBOX_NAME", f" {SETTINGS.workiq_toolbox_name} ")
+    monkeypatch.setenv("WORKIQ_TOOLBOX_VERSION", " 2 ")
     assert get_settings().workiq_connection_name == SETTINGS.workiq_connection_name
-    assert get_settings().workiq_connection_id == SETTINGS.workiq_connection_id
+    assert get_settings().workiq_toolbox_name == SETTINGS.workiq_toolbox_name
+    assert get_settings().workiq_toolbox_version == "2"
 
 
-def test_agent_wires_full_workiq_and_learn_catalogs_without_toolbox(monkeypatch):
+def test_agent_routes_workiq_only_through_pinned_toolbox(monkeypatch):
     factory = MagicMock()
     client_factory = MagicMock()
     monkeypatch.setattr(agent, "Agent", factory)
     monkeypatch.setattr(agent, "FoundryChatClient", client_factory)
+    toolbox = MagicMock()
+    monkeypatch.setattr(agent, "FoundryToolbox", toolbox)
     context = MagicMock()
+    context.call_id = "opaque-call"
+    context.user_id = "user-a"
     context.platform_headers.return_value = {"x-agent-foundry-call-id": "opaque-call"}
     monkeypatch.setattr(agent, "get_request_context", lambda: context)
     credential = MagicMock()
@@ -123,13 +136,32 @@ def test_agent_wires_full_workiq_and_learn_catalogs_without_toolbox(monkeypatch)
     assert "never overwrite existing files" in " ".join(options["instructions"].split())
     assert "without asking for tool-use\napproval or confirmation" in options["instructions"]
     assert options["default_options"] == {"store": False}
-    assert [tool.as_dict() for tool in options["tools"]] == expected_tools()
+    public_tool, private_tool = options["tools"]
+    assert [public_tool.as_dict()] == expected_tools()
+    assert private_tool is toolbox.return_value
+    toolbox.assert_called_once_with(
+        credential, name="WorkIQ",
+        url=f"{SETTINGS.project_endpoint}/toolboxes/mea-hosted-agent-workiq/versions/2/mcp?api-version=v1",
+    )
 
 
-@pytest.mark.parametrize("connection_id", ["", " "])
-def test_runtime_requires_workiq_connection_id(connection_id):
-    with pytest.raises(ValueError, match="WORKIQ_CONNECTION_ID"):
-        agent.create_tools(replace(SETTINGS, workiq_connection_id=connection_id))
+@pytest.mark.parametrize("field", ["workiq_toolbox_name", "workiq_toolbox_version"])
+def test_runtime_requires_pinned_workiq_toolbox(field):
+    with pytest.raises(ValueError, match="pinned toolbox"):
+        agent.create_tools(replace(SETTINGS, **{field: ""}), MagicMock())
+
+
+@pytest.mark.parametrize(("call_id", "user_id"), [(None, "user"), ("call", None), (" ", "user")])
+def test_runtime_rejects_missing_caller_before_creating_clients(monkeypatch, call_id, user_id):
+    monkeypatch.setattr(agent, "get_request_context", lambda: SimpleNamespace(call_id=call_id, user_id=user_id))
+    toolbox = MagicMock()
+    model = MagicMock()
+    monkeypatch.setattr(agent, "FoundryToolbox", toolbox)
+    monkeypatch.setattr(agent, "FoundryChatClient", model)
+    with pytest.raises(RuntimeError, match="requires a signed-in user"):
+        agent.create_agent(SETTINGS, MagicMock())
+    toolbox.assert_not_called()
+    model.assert_not_called()
 
 
 def test_deploy_requires_workiq_connection_name(monkeypatch, capsys):
@@ -171,15 +203,57 @@ def test_connection_lookup_failure_is_not_replaced_by_a_fallback(monkeypatch):
     project.agents.create_version_from_code.assert_not_called()
 
 
+def test_connection_auth_type_reads_only_arm_metadata(monkeypatch):
+    session = MagicMock(spec=Session)
+    arm_response = Response()
+    arm_response.status_code = 200
+    arm_response.raw = MagicMock()
+    arm_response._content = b'{"properties":{"authType":"AgentOnBehalfOfUser"}}'
+    arm_response._content_consumed = True
+    session.request.return_value = arm_response
+    transport = deploy.RequestsTransport(session=session)
+    monkeypatch.setattr(deploy, "RequestsTransport", lambda: transport)
+    credential = MagicMock(spec=deploy.TokenCredential)
+    credential.get_token.return_value = AccessToken("offline-arm-token", 9_999_999_999)
+
+    assert deploy.get_connection_auth_type(CONNECTION_ID, credential) == "AgentOnBehalfOfUser"
+    args, kwargs = session.request.call_args
+    assert args == ("GET", f"https://management.azure.com{CONNECTION_ID}?api-version=2025-06-01")
+    assert kwargs["headers"]["Authorization"] == "Bearer offline-arm-token"
+    assert kwargs["allow_redirects"] is False
+    with pytest.raises(ValueError, match="ARM project connection resource ID"):
+        deploy.get_connection_auth_type(f"unexpected-prefix{CONNECTION_ID}", credential)
+    session.request.assert_called_once()
+
+
+@pytest.mark.parametrize("auth_type", ["CustomKeys", "ManagedIdentity", "None", None])
+def test_deploy_rejects_shared_or_unknown_auth(monkeypatch, auth_type):
+    project, _ = clients(monkeypatch, deploy, ["deploy"])
+    deploy.get_connection_auth_type.return_value = auth_type
+    with pytest.raises(RuntimeError, match="shared auth is forbidden"):
+        deploy.main()
+    project.toolboxes.create_version.assert_not_called()
+    project.agents.create_version_from_code.assert_not_called()
+    project.agents.update_details.assert_not_called()
+
+
 @pytest.mark.parametrize("trailing_slash", [False, True])
-def test_deploy_resolves_connection_packages_runtime_and_routes(monkeypatch, trailing_slash):
+@pytest.mark.parametrize("auth_type", ["OAuth2", "AgentOnBehalfOfUser"])
+def test_deploy_resolves_connection_packages_runtime_and_routes(monkeypatch, trailing_slash, auth_type):
     project, _ = clients(monkeypatch, deploy, ["deploy", "--name", "custom-hosted"])
     if trailing_slash:
         project.connections.get.return_value.target += "/"
-    project.connections.get.return_value.id = "/resolved/connection"
+    deploy.get_connection_auth_type.return_value = auth_type
     deploy.main()
 
     project.connections.get.assert_called_once_with(SETTINGS.workiq_connection_name)
+    assert deploy.get_connection_auth_type.call_args.args[0] == CONNECTION_ID
+    toolbox = project.toolboxes.create_version.call_args.kwargs
+    assert toolbox["name"] == "custom-hosted-workiq"
+    assert [tool.as_dict() for tool in toolbox["tools"]] == [{
+        "type": "mcp", "server_label": "WorkIQ", "server_url": agent.WORKIQ_MCP_URL,
+        "project_connection_id": CONNECTION_ID, "require_approval": "never",
+    }]
     upload = project.agents.create_version_from_code.call_args.kwargs
     assert upload["agent_name"] == "custom-hosted"
     assert upload["code"].closed
@@ -194,7 +268,8 @@ def test_deploy_resolves_connection_packages_runtime_and_routes(monkeypatch, tra
     assert definition["environment_variables"] == {
         "FOUNDRY_PROJECT_ENDPOINT": SETTINGS.project_endpoint,
         "AZURE_AI_MODEL_DEPLOYMENT_NAME": "workshop-model",
-        "WORKIQ_CONNECTION_ID": "/resolved/connection",
+        "WORKIQ_TOOLBOX_NAME": SETTINGS.workiq_toolbox_name,
+        "WORKIQ_TOOLBOX_VERSION": SETTINGS.workiq_toolbox_version,
     }
     project.agents.get_version.assert_called_once_with(agent_name="custom-hosted", agent_version="3")
     route = project.agents.update_details.call_args.kwargs
@@ -308,7 +383,6 @@ def test_invoke_reports_incomplete_and_failed_responses(monkeypatch, status):
 
 @pytest.mark.parametrize(("item", "message"), [
     (SimpleNamespace(type="mcp_call", error="Tenant denial"), "Tenant denial"),
-    (SimpleNamespace(type="oauth_consent_request"), "OAuth consent is required"),
     (SimpleNamespace(type="mcp_approval_request"), "Unexpected MCP approval"),
 ])
 def test_invoke_surfaces_mcp_failures_without_claiming_success(monkeypatch, capsys, item, message):
@@ -320,6 +394,16 @@ def test_invoke_surfaces_mcp_failures_without_claiming_success(monkeypatch, caps
     assert client.responses.create.call_count == 1
 
 
+def test_invoke_reports_consent_on_incomplete_toolbox_response(monkeypatch):
+    _, client = clients(monkeypatch, invoke, ["invoke"])
+    client.responses.create.return_value = response(
+        SimpleNamespace(type="oauth_consent_request"), status="incomplete",
+    )
+    with pytest.raises(RuntimeError, match="Work IQ consent is required"):
+        invoke.main()
+    assert client.responses.create.call_count == 1
+
+
 def test_delete_removes_only_selected_agent(monkeypatch):
     project, _ = clients(monkeypatch, delete, ["delete", "--name", "custom-hosted"])
     delete.main()
@@ -327,7 +411,7 @@ def test_delete_removes_only_selected_agent(monkeypatch):
     project.connections.delete.assert_not_called()
 
 
-def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_path, monkeypatch):
+def test_real_responses_host_keeps_workiq_context_on_the_toolbox_transport(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     requests = []
     model_clients = []
@@ -339,14 +423,56 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer(__name__)
     monkeypatch.setattr(agent, "_TRACER", tracer)
+    toolbox_calls = []
+    tool_reads = []
+
+    def toolbox_transport(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.host == "example.services.ai.azure.com"
+        assert request.headers["authorization"] == "Bearer offline-toolbox-token"
+        assert "x-agent-user-id" not in request.headers
+        if request.method == "GET":
+            return httpx2.Response(405)
+        payload = json.loads(request.content)
+        method = payload["method"]
+        if method == "notifications/initialized":
+            return httpx2.Response(202)
+        if method == "server/discover":
+            return httpx2.Response(200, json={
+                "jsonrpc": "2.0", "id": payload["id"],
+                "error": {"code": -32601, "message": "Method not found"},
+            })
+        if method == "initialize":
+            result = {"protocolVersion": payload["params"]["protocolVersion"],
+                      "capabilities": {"tools": {}}, "serverInfo": {"name": "Work IQ", "version": "1"}}
+        elif method == "ping":
+            result = {}
+        elif method == "tools/list":
+            toolbox_calls.append(request.headers["x-agent-foundry-call-id"])
+            result = {"tools": [{
+                "name": "workiq_search", "description": "Search test messages",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]}
+        else:
+            assert method == "tools/call"
+            assert payload["params"]["name"] == "workiq_search"
+            tool_reads.append(request.headers["x-agent-foundry-call-id"])
+            result = {"content": [{"type": "text", "text": f"synthetic-message-{tool_reads[-1]}"}]}
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+
+    monkeypatch.setattr(_toolbox, "httpx", SimpleNamespace(
+        AsyncClient=lambda **options: httpx2.AsyncClient(transport=httpx2.MockTransport(toolbox_transport), **options),
+    ))
 
     def transport(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         payload = json.loads(request.content)
         assert payload["model"] == SETTINGS.model_deployment
-        assert payload["tools"] == expected_tools()
+        assert [tool for tool in payload["tools"] if tool["type"] == "mcp"] == expected_tools()
+        function = next(tool["name"] for tool in payload["tools"] if tool["type"] == "function")
         assert payload["store"] is False
-        assert request.headers["x-agent-foundry-call-id"] == f"call-{len(requests)}"
+        call_id = request.headers["x-agent-foundry-call-id"]
+        is_first_model_call = len(requests) % 2 == 1
+        assert call_id == f"call-{(len(requests) + 1) // 2}"
         message = {
             "id": "msg_test", "type": "message", "role": "assistant", "status": "completed",
             "content": [{"type": "output_text", "text": "Architecture", "annotations": []}],
@@ -355,22 +481,35 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
             "type": "mcp_call", "id": "mcp_test", "name": "learn_search", "server_label": "MicrosoftLearn",
             "arguments": '{"query":"private-argument"}', "output": "private-result", "status": "completed",
         }
-        failed_call = {
-            "type": "mcp_call", "id": "mcp_failed", "name": "workiq_search", "server_label": "WorkIQ",
-            "arguments": "{}", "status": "failed",
-        }
         events = [
             {"type": "response.output_text.delta", "sequence_number": 0,
              "item_id": "msg_test", "output_index": 2, "content_index": 0, "delta": "Architecture"},
             {"type": "response.output_item.done", "sequence_number": 1, "output_index": 0, "item": tool_call},
             {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": tool_call},
-            {"type": "response.output_item.done", "sequence_number": 3, "output_index": 1, "item": failed_call},
             {"type": "response.output_item.done", "sequence_number": 4, "output_index": 2, "item": message},
             {"type": "response.completed", "sequence_number": 5, "response": {
                 "id": "resp_model", "object": "response", "created_at": 0, "status": "completed",
-                "model": SETTINGS.model_deployment, "output": [tool_call, failed_call, message],
+                "model": SETTINGS.model_deployment, "output": [tool_call, message],
             }},
         ]
+        if is_first_model_call:
+            item = {
+                "type": "function_call", "id": "fc_test", "call_id": "fn_test",
+                "name": function, "arguments": "{}", "status": "completed",
+            }
+            events = [
+                {"type": "response.output_item.added", "sequence_number": 0, "output_index": 0,
+                 "item": {**item, "arguments": "", "status": "in_progress"}},
+                {"type": "response.function_call_arguments.done", "sequence_number": 1, "output_index": 0,
+                 "item_id": item["id"], "name": function, "arguments": "{}"},
+                {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": item},
+                {"type": "response.completed", "sequence_number": 3, "response": {
+                    "id": "resp_model", "object": "response", "created_at": 0, "status": "completed",
+                    "model": SETTINGS.model_deployment, "output": [item],
+                }},
+            ]
+        else:
+            assert f"synthetic-message-{call_id}" in json.dumps(payload["input"])
         return httpx2.Response(
             200, headers={"content-type": "text/event-stream"},
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n",
@@ -389,6 +528,7 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
 
     monkeypatch.setattr(agent, "FoundryChatClient", create_client)
     credential = MagicMock()
+    credential.get_token.return_value = AccessToken("offline-toolbox-token", 9_999_999_999)
 
     async def scenario():
         server = ResponsesHostServer(agent=lambda: agent.create_agent(SETTINGS, credential))
@@ -397,7 +537,7 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
             assert ready.status_code == 200
             for number in (1, 2):
                 with tracer.start_as_current_span("request"):
-                    headers = {"x-agent-foundry-call-id": f"call-{number}"}
+                    headers = {"x-agent-foundry-call-id": f"call-{number}", "x-agent-user-id": f"user-{number}"}
                     TraceContextTextMapPropagator().inject(headers)
                     result = await client.post(
                         "/responses", json={"input": "Design an architecture", "stream": False, "store": False},
@@ -413,9 +553,10 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
         spans = exporter.get_finished_spans()
     finally:
         provider.shutdown()
-    assert len(requests) == 2
+    assert len(requests) == 4
     assert all(client.is_closed for client in model_clients)
-    credential.get_token.assert_not_called()
+    assert toolbox_calls == ["call-1", "call-2"]
+    assert tool_reads == ["call-1", "call-2"]
     request_spans = [span for span in spans if span.name == "request"]
     assert len(request_spans) == 2
     for request_span in request_spans:
@@ -423,17 +564,13 @@ def test_real_responses_host_forwards_direct_mcp_payload_and_caller_context(tmp_
             span for span in spans
             if span.name.startswith("execute_tool ") and span.context.trace_id == request_span.context.trace_id
         ]
-        assert [span.name for span in tools] == ["execute_tool learn_search", "execute_tool workiq_search"], [
-            span.name for span in spans
-        ]
+        assert [span.name for span in tools] == ["execute_tool learn_search"]
         assert dict(tools[0].attributes) == {
             "gen_ai.operation.name": "execute_tool",
             "gen_ai.tool.name": "learn_search",
             "gen_ai.tool.type": "mcp",
             "gen_ai.tool.call.id": "mcp_test",
         }
-        assert tools[1].status.status_code == StatusCode.ERROR
-        assert tools[1].attributes["error.type"] == "mcp_call_failed"
 
 
 def test_non_streaming_telemetry_only_reports_terminal_mcp_calls(monkeypatch):
